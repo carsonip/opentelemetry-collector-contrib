@@ -6,7 +6,7 @@ package metrics
 import (
 	"github.com/spf13/pflag"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/common"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/common"
 )
 
 // Config describes the test scenario.

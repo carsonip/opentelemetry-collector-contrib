@@ -1,4 +1,4 @@
-module github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/e2etest
+module github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/e2etest
 
 go 1.21
 

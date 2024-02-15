@@ -12,10 +12,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/logs"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/metrics"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/traces"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/logs"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/metrics"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/traces"
 )
 
 var (
