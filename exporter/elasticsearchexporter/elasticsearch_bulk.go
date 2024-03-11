@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	esutil7 "github.com/elastic/go-elasticsearch/v7/esutil"
 	elasticsearch8 "github.com/elastic/go-elasticsearch/v8"
 	"go.uber.org/zap"
 
@@ -26,7 +25,6 @@ type esConfigCurrent = elasticsearch8.Config
 type esBulkIndexerCurrent = docappender.BulkIndexer
 
 type esBulkIndexerItem = docappender.BulkIndexerItem
-type esBulkIndexerResponseItem = esutil7.BulkIndexerResponseItem
 
 // clientLogger implements the estransport.Logger interface
 // that is required by the Elasticsearch client for logging.

@@ -7,6 +7,7 @@ package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"go.opentelemetry.io/collector/exporter/exporterbatcher"
 	"go.opentelemetry.io/collector/exporter/exporterqueue"
@@ -130,6 +131,18 @@ func createLogsRequestExporter(
 		return nil, nil
 	}
 
+	marshalRequest := func(req exporterhelper.Request) ([]byte, error) {
+		b, err := json.Marshal(*req.(*Request))
+		return b, err
+	}
+
+	unmarshalRequest := func(b []byte) (exporterhelper.Request, error) {
+		var req Request
+		err := json.Unmarshal(b, &req)
+		req.bulkIndexer = logsExporter.bulkIndexer
+		return &req, err
+	}
+
 	batcherCfg := exporterbatcher.NewDefaultConfig()
 
 	return exporterhelper.NewLogsRequestExporter(
@@ -140,8 +153,8 @@ func createLogsRequestExporter(
 		exporterhelper.WithShutdown(logsExporter.Shutdown),
 		exporterhelper.WithRequestQueue(exporterqueue.NewDefaultConfig(),
 			exporterqueue.NewPersistentQueueFactory[exporterhelper.Request](cf.QueueSettings.StorageID, exporterqueue.PersistentQueueSettings[exporterhelper.Request]{
-				Marshaler:   MarshalRequest,
-				Unmarshaler: UnmarshalRequest,
+				Marshaler:   marshalRequest,
+				Unmarshaler: unmarshalRequest,
 			})),
 	)
 }

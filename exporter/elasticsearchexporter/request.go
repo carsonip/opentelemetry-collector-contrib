@@ -3,14 +3,12 @@ package elasticsearchexporter
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"github.com/elastic/go-docappender"
-	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )
 
 type Request struct {
 	bulkIndexer *esBulkIndexerCurrent
-	Items       []BulkIndexerItem `json:"Items"`
+	Items       []BulkIndexerItem
 }
 
 func NewRequest(bulkIndexer *esBulkIndexerCurrent) *Request {
@@ -42,15 +40,4 @@ func (r *Request) Add(index string, body []byte) {
 type BulkIndexerItem struct {
 	Index string
 	Body  []byte
-}
-
-func MarshalRequest(req exporterhelper.Request) ([]byte, error) {
-	b, err := json.Marshal(*req.(*Request))
-	return b, err
-}
-
-func UnmarshalRequest(b []byte) (exporterhelper.Request, error) {
-	var req Request
-	err := json.Unmarshal(b, &req)
-	return &req, err
 }
