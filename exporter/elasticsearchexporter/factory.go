@@ -121,7 +121,7 @@ func createLogsRequestExporter(
 		rr1 := r1.(*Request)
 		rr2 := r2.(*Request)
 		req := NewRequest(logsExporter.bulkIndexer)
-		req.items = append(rr1.items, rr2.items...)
+		req.Items = append(rr1.Items, rr2.Items...)
 		return req, nil
 	}
 
@@ -134,7 +134,10 @@ func createLogsRequestExporter(
 		exporterhelper.WithBatcher(batcherCfg, exporterhelper.WithRequestBatchFuncs(batchMergeFunc, nil)),
 		exporterhelper.WithShutdown(logsExporter.Shutdown),
 		exporterhelper.WithRequestQueue(exporterqueue.NewDefaultConfig(),
-			exporterqueue.NewPersistentQueueFactory[exporterhelper.Request](cf.QueueSettings.StorageID, exporterqueue.PersistentQueueSettings[exporterhelper.Request]{})),
+			exporterqueue.NewPersistentQueueFactory[exporterhelper.Request](cf.QueueSettings.StorageID, exporterqueue.PersistentQueueSettings[exporterhelper.Request]{
+				Marshaler:   MarshalRequest,
+				Unmarshaler: UnmarshalRequest,
+			})),
 	)
 }
 

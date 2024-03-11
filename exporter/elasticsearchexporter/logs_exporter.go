@@ -6,7 +6,6 @@
 package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter"
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -133,7 +132,7 @@ func (e *elasticsearchLogsExporter) appendLogRecord(ctx context.Context, req *Re
 	if err != nil {
 		return fmt.Errorf("Failed to encode log event: %w", err)
 	}
-	req.items = append(req.items, esBulkIndexerItem{Index: fIndex, Body: bytes.NewReader(document)})
+	req.Add(fIndex, document)
 	return nil
 }
 
