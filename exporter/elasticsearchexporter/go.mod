@@ -96,3 +96,5 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => ../../pkg/golden
 
 replace github.com/elastic/go-docappender => /home/carson/projects/go-docappender
+
+replace go.opentelemetry.io/collector/exporter => /home/carson/projects/opentelemetry-collector/exporter

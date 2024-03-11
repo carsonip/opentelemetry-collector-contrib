@@ -8,6 +8,8 @@ package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/collector/exporter/exporterbatcher"
+	"go.opentelemetry.io/collector/exporter/exporterqueue"
 	"runtime"
 	"time"
 
@@ -92,6 +94,47 @@ func createLogsExporter(
 		logsExporter.pushLogsData,
 		exporterhelper.WithShutdown(logsExporter.Shutdown),
 		exporterhelper.WithQueue(cf.QueueSettings),
+	)
+}
+
+// createLogsRequestExporter creates a new request exporter for logs.
+//
+// Logs are directly indexed into Elasticsearch.
+func createLogsRequestExporter(
+	ctx context.Context,
+	set exporter.CreateSettings,
+	cfg component.Config,
+) (exporter.Logs, error) {
+	cf := cfg.(*Config)
+	if cf.Index != "" {
+		set.Logger.Warn("index option are deprecated and replaced with logs_index and traces_index.")
+	}
+
+	setDefaultUserAgentHeader(cf, set.BuildInfo)
+
+	logsExporter, err := newLogsExporter(set.Logger, cf)
+	if err != nil {
+		return nil, fmt.Errorf("cannot configure Elasticsearch logsExporter: %w", err)
+	}
+
+	batchMergeFunc := func(ctx context.Context, r1, r2 exporterhelper.Request) (exporterhelper.Request, error) {
+		rr1 := r1.(*Request)
+		rr2 := r2.(*Request)
+		req := NewRequest(logsExporter.bulkIndexer)
+		req.items = append(rr1.items, rr2.items...)
+		return req, nil
+	}
+
+	batcherCfg := exporterbatcher.NewDefaultConfig()
+
+	return exporterhelper.NewLogsRequestExporter(
+		ctx,
+		set,
+		logsExporter.logsDataToRequest,
+		exporterhelper.WithBatcher(batcherCfg, exporterhelper.WithRequestBatchFuncs(batchMergeFunc, nil)),
+		exporterhelper.WithShutdown(logsExporter.Shutdown),
+		exporterhelper.WithRequestQueue(exporterqueue.NewDefaultConfig(),
+			exporterqueue.NewPersistentQueueFactory[exporterhelper.Request](cf.QueueSettings.StorageID, exporterqueue.PersistentQueueSettings[exporterhelper.Request]{})),
 	)
 }
 
