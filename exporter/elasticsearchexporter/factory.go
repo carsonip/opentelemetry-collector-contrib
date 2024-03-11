@@ -144,6 +144,9 @@ func createLogsRequestExporter(
 	}
 
 	batcherCfg := exporterbatcher.NewDefaultConfig()
+	queueCfg := exporterqueue.NewDefaultConfig()
+	queueCfg.NumConsumers = 1
+	queueCfg.QueueSize = 100_000_000
 
 	return exporterhelper.NewLogsRequestExporter(
 		ctx,
@@ -151,7 +154,7 @@ func createLogsRequestExporter(
 		logsExporter.logsDataToRequest,
 		exporterhelper.WithBatcher(batcherCfg, exporterhelper.WithRequestBatchFuncs(batchMergeFunc, batchMergeSplitFunc)),
 		exporterhelper.WithShutdown(logsExporter.Shutdown),
-		exporterhelper.WithRequestQueue(exporterqueue.NewDefaultConfig(),
+		exporterhelper.WithRequestQueue(queueCfg,
 			exporterqueue.NewPersistentQueueFactory[exporterhelper.Request](cf.QueueSettings.StorageID, exporterqueue.PersistentQueueSettings[exporterhelper.Request]{
 				Marshaler:   marshalRequest,
 				Unmarshaler: unmarshalRequest,
