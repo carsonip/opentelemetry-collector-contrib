@@ -125,13 +125,18 @@ func createLogsRequestExporter(
 		return req, nil
 	}
 
+	batchMergeSplitFunc := func(ctx context.Context, conf exporterbatcher.MaxSizeConfig, optReq, req exporterhelper.Request) ([]exporterhelper.Request, error) {
+		panic("not implemented")
+		return nil, nil
+	}
+
 	batcherCfg := exporterbatcher.NewDefaultConfig()
 
 	return exporterhelper.NewLogsRequestExporter(
 		ctx,
 		set,
 		logsExporter.logsDataToRequest,
-		exporterhelper.WithBatcher(batcherCfg, exporterhelper.WithRequestBatchFuncs(batchMergeFunc, nil)),
+		exporterhelper.WithBatcher(batcherCfg, exporterhelper.WithRequestBatchFuncs(batchMergeFunc, batchMergeSplitFunc)),
 		exporterhelper.WithShutdown(logsExporter.Shutdown),
 		exporterhelper.WithRequestQueue(exporterqueue.NewDefaultConfig(),
 			exporterqueue.NewPersistentQueueFactory[exporterhelper.Request](cf.QueueSettings.StorageID, exporterqueue.PersistentQueueSettings[exporterhelper.Request]{
