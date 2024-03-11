@@ -25,7 +25,7 @@ type elasticsearchTracesExporter struct {
 	maxAttempts    int
 
 	client      *esClientCurrent
-	bulkIndexer esBulkIndexerCurrent
+	bulkIndexer *esBulkIndexerCurrent
 	model       mappingModel
 }
 
@@ -69,7 +69,8 @@ func newTracesExporter(logger *zap.Logger, cfg *Config) (*elasticsearchTracesExp
 }
 
 func (e *elasticsearchTracesExporter) Shutdown(ctx context.Context) error {
-	return e.bulkIndexer.Close(ctx)
+	_, err := e.bulkIndexer.Flush(ctx)
+	return err
 }
 
 func (e *elasticsearchTracesExporter) pushTraceData(

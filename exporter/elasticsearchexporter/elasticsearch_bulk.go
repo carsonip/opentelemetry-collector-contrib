@@ -9,24 +9,23 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"fmt"
-	"io"
+	"github.com/elastic/go-docappender"
 	"net/http"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	elasticsearch7 "github.com/elastic/go-elasticsearch/v7"
 	esutil7 "github.com/elastic/go-elasticsearch/v7/esutil"
+	elasticsearch8 "github.com/elastic/go-elasticsearch/v8"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/sanitize"
 )
 
-type esClientCurrent = elasticsearch7.Client
-type esConfigCurrent = elasticsearch7.Config
-type esBulkIndexerCurrent = esutil7.BulkIndexer
+type esClientCurrent = elasticsearch8.Client
+type esConfigCurrent = elasticsearch8.Config
+type esBulkIndexerCurrent = docappender.BulkIndexer
 
-type esBulkIndexerItem = esutil7.BulkIndexerItem
+type esBulkIndexerItem = docappender.BulkIndexerItem
 type esBulkIndexerResponseItem = esutil7.BulkIndexerResponseItem
 
 // clientLogger implements the estransport.Logger interface
@@ -91,7 +90,7 @@ func newElasticsearchClient(logger *zap.Logger, config *Config) (*esClientCurren
 		maxRetries = 0
 	}
 
-	return elasticsearch7.NewClient(esConfigCurrent{
+	return elasticsearch8.NewClient(esConfigCurrent{
 		Transport: transport,
 
 		// configure connection setup
@@ -103,9 +102,8 @@ func newElasticsearchClient(logger *zap.Logger, config *Config) (*esClientCurren
 		Header:    headers,
 
 		// configure retry behavior
-		RetryOnStatus:        retryOnStatus,
-		DisableRetry:         retryDisabled,
-		EnableRetryOnTimeout: config.Retry.Enabled,
+		RetryOnStatus: retryOnStatus,
+		DisableRetry:  retryDisabled,
 		//RetryOnError:  retryOnError, // should be used from esclient version 8 onwards
 		MaxRetries:   maxRetries,
 		RetryBackoff: createElasticsearchBackoffFunc(&config.Retry),
@@ -136,20 +134,9 @@ func newTransport(config *Config, tlsCfg *tls.Config) *http.Transport {
 	return transport
 }
 
-func newBulkIndexer(logger *zap.Logger, client *elasticsearch7.Client, config *Config) (esBulkIndexerCurrent, error) {
+func newBulkIndexer(logger *zap.Logger, client *esClientCurrent, config *Config) (*esBulkIndexerCurrent, error) {
 	// TODO: add debug logger
-	return esutil7.NewBulkIndexer(esutil7.BulkIndexerConfig{
-		NumWorkers:    config.NumWorkers,
-		FlushBytes:    config.Flush.Bytes,
-		FlushInterval: config.Flush.Interval,
-		Client:        client,
-		Pipeline:      config.Pipeline,
-		Timeout:       config.Timeout,
-
-		OnError: func(_ context.Context, err error) {
-			logger.Error(fmt.Sprintf("Bulk indexer error: %v", err))
-		},
-	})
+	return docappender.NewBulkIndexer(client, 0, 0), nil
 }
 
 func createElasticsearchBackoffFunc(config *RetrySettings) func(int) time.Duration {
@@ -184,43 +171,9 @@ func shouldRetryEvent(status int) bool {
 	return false
 }
 
-func pushDocuments(ctx context.Context, logger *zap.Logger, index string, document []byte, bulkIndexer esBulkIndexerCurrent, maxAttempts int) error {
-	attempts := 1
+func pushDocuments(ctx context.Context, logger *zap.Logger, index string, document []byte, bulkIndexer *esBulkIndexerCurrent, maxAttempts int) error {
 	body := bytes.NewReader(document)
-	item := esBulkIndexerItem{Action: createAction, Index: index, Body: body}
-	// Setup error handler. The handler handles the per item response status based on the
-	// selective ACKing in the bulk response.
-	item.OnFailure = func(ctx context.Context, item esBulkIndexerItem, resp esBulkIndexerResponseItem, err error) {
-		switch {
-		case attempts < maxAttempts && shouldRetryEvent(resp.Status):
-			logger.Debug("Retrying to index",
-				zap.String("name", index),
-				zap.Int("attempt", attempts),
-				zap.Int("status", resp.Status),
-				zap.NamedError("reason", err))
+	item := esBulkIndexerItem{Index: index, Body: body}
 
-			attempts++
-			_, _ = body.Seek(0, io.SeekStart)
-			_ = bulkIndexer.Add(ctx, item)
-
-		case resp.Status == 0 && err != nil:
-			// Encoding error. We didn't even attempt to send the event
-			logger.Error("Drop docs: failed to add docs to the bulk request buffer.",
-				zap.NamedError("reason", err))
-
-		case err != nil:
-			logger.Error("Drop docs: failed to index",
-				zap.String("name", index),
-				zap.Int("attempt", attempts),
-				zap.Int("status", resp.Status),
-				zap.NamedError("reason", err))
-
-		default:
-			logger.Error(fmt.Sprintf("Drop docs: failed to index: %#v", resp.Error),
-				zap.Int("attempt", attempts),
-				zap.Int("status", resp.Status))
-		}
-	}
-
-	return bulkIndexer.Add(ctx, item)
+	return bulkIndexer.Add(item)
 }
