@@ -2,6 +2,7 @@ github.com/armon/go-radix v1.0.0 h1:F4z6KzEeeQIMeLFa97iZU6vupzoecKdU5TX24SNppXI=
 github.com/armon/go-radix v1.0.0/go.mod h1:ufUuZ+zHj4x4TnLV4JWEpy2hxWSpsRywHrMgIH9cCH8=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
+github.com/carsonip/go-docappender v1.0.1-0.20240312173335-533abc382d1b/go.mod h1:0H1WqNPbEFjrkzlIbPocBFyGbQJxCuKnkvWOx08xbEk=
 github.com/cenkalti/backoff/v4 v4.2.1 h1:y4OZtCnogmCPw98Zjyt5a6+QwPLGkiQsYW5oUqylYbM=
 github.com/cenkalti/backoff/v4 v4.2.1/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/cespare/xxhash/v2 v2.2.0 h1:DC2CZ1Ep5Y4k3ZQ899DldepgrayRUGE6BBZ/cd9Cj44=
@@ -123,6 +124,7 @@ go.opentelemetry.io/collector/consumer v0.96.1-0.20240306115632-b2693620eff6 h1:
 go.opentelemetry.io/collector/consumer v0.96.1-0.20240306115632-b2693620eff6/go.mod h1:pF9K1Oty2E3Z/crgyIg55DIy7S8QXYMrcyHvARUyGIY=
 go.opentelemetry.io/collector/exporter v0.96.1-0.20240306115632-b2693620eff6 h1:ijKDfnFsN14BxY62hTAqlnlPHonMP48JkR1VszGvvMY=
 go.opentelemetry.io/collector/exporter v0.96.1-0.20240306115632-b2693620eff6/go.mod h1:/CrJEFoknTOx60Vcr59CaJ6EwZqct/D6dzZV3rtbS/4=
+go.opentelemetry.io/collector/exporter v0.96.1-0.20240312113120-fbc0ce074899/go.mod h1:/CrJEFoknTOx60Vcr59CaJ6EwZqct/D6dzZV3rtbS/4=
 go.opentelemetry.io/collector/extension v0.96.1-0.20240306115632-b2693620eff6 h1:GAYQIFEq/Yy5fK1I+Qlv17wRV6By7DdPCiZcaiQEyTA=
 go.opentelemetry.io/collector/extension v0.96.1-0.20240306115632-b2693620eff6/go.mod h1:/PxTeHkU+8Ebouf/7Nk5NH+akNVGrSVlnjlw2vXKR6E=
 go.opentelemetry.io/collector/pdata v1.3.1-0.20240306115632-b2693620eff6 h1:YV+WmEZfM0wv4pUtj5uJsLgC1lHgGp8WKhzyNphyX9Y=
