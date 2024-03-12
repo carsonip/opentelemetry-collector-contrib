@@ -145,7 +145,7 @@ func createLogsRequestExporter(
 
 	batcherCfg := exporterbatcher.NewDefaultConfig()
 	queueCfg := exporterqueue.NewDefaultConfig()
-	queueCfg.NumConsumers = 1
+	queueCfg.NumConsumers = 1 // FIXME: use a pool of bulk indexer
 	queueCfg.QueueSize = 100_000_000
 
 	return exporterhelper.NewLogsRequestExporter(
