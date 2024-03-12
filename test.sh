@@ -5,6 +5,7 @@ trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
 ES_EXPORTER_DIR=/tmp/otelcol/file_storage/elasticsearchexporter
 GENERATE_LOG_COUNT=${GENERATE_LOG_COUNT:-20000}
 GENERATE_LOG_RATE=${GENERATE_LOG_RATE:-1000}
+TIME_TO_DRAIN_QUEUE=${TIME_TO_DRAIN_QUEUE:-60}
 
 set -x
 
@@ -45,7 +46,7 @@ docker network connect otel-es-network otel-elasticsearch
 
 ./build/my-otelcol --config otelcol.yaml &
 COL_PID=$!
-sleep 60 # persistent queue does not drain on shutdown
+sleep "$TIME_TO_DRAIN_QUEUE" # persistent queue does not drain on shutdown
 kill $COL_PID
 wait $COL_PID
 
