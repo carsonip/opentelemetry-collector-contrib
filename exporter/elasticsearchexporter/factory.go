@@ -131,6 +131,7 @@ func createLogsRequestExporter(
 	}
 
 	batchMergeSplitFunc := func(ctx context.Context, conf exporterbatcher.MaxSizeConfig, optReq, req exporterhelper.Request) ([]exporterhelper.Request, error) {
+		// FIXME: implement merge split func
 		panic("not implemented")
 		return nil, nil
 	}
