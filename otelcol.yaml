@@ -1,0 +1,41 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+      http:
+        endpoint: localhost:4318
+
+exporters:
+  elasticsearch:
+    endpoints: [ "http://localhost:9200" ]
+    index: foo
+    user: admin
+    password: changeme
+    retry_on_failure:
+      enabled: false
+      max_interval: 600s
+      max_elapsed_time: 0s
+    sending_queue:
+      enabled: true
+      storage: file_storage/elasticsearchexporter
+      num_consumers: 1
+      queue_size: 10000000
+    retry:
+      enabled: true
+      max_requests: 10000
+
+extensions:
+  file_storage/elasticsearchexporter:
+    directory: /tmp/otelcol/file_storage/elasticsearchexporter
+
+service:
+  extensions: [file_storage/elasticsearchexporter]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: []
+      exporters: [elasticsearch]
+#  telemetry:
+#    logs:
+#      level: debug

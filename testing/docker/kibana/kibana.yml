@@ -1,0 +1,10 @@
+server.host: 0.0.0.0
+status.allowAnonymous: true
+monitoring.ui.container.elasticsearch.enabled: true
+telemetry.enabled: false
+xpack.security.encryptionKey: fhjskloppd678ehkdfdlliverpoolfcr
+xpack.encryptedSavedObjects.encryptionKey: fhjskloppd678ehkdfdlliverpoolfcr
+
+# Disable the Fleet agent ID verification pipeline,
+# which sets Fleet-specific fields that we don't want.
+xpack.fleet.agentIdVerificationEnabled: false
