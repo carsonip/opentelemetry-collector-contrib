@@ -166,7 +166,7 @@ func createLogsRequestExporter(
 				Marshaler:   marshalRequest,
 				Unmarshaler: unmarshalRequest,
 			})),
-		exporterhelper.WithRetry(cf.RetryOnFailure),
+		exporterhelper.WithRetry(cf.RetryOnFailure), // FIXME: this is useless. retry_sender is ignored by batch_sender
 	)
 }
 
