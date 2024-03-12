@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/config/configopaque"
+	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )
@@ -18,6 +19,7 @@ import (
 // Config defines configuration for Elastic exporter.
 type Config struct {
 	exporterhelper.QueueSettings `mapstructure:"sending_queue"`
+	RetryOnFailure               configretry.BackOffConfig `mapstructure:"retry_on_failure"`
 	// Endpoints holds the Elasticsearch URLs the exporter should send events to.
 	//
 	// This setting is required if CloudID is not set and if the

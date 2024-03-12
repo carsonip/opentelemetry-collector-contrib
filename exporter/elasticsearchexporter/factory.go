@@ -9,14 +9,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go.opentelemetry.io/collector/exporter/exporterbatcher"
-	"go.opentelemetry.io/collector/exporter/exporterqueue"
 	"runtime"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/exporter"
+	"go.opentelemetry.io/collector/exporter/exporterbatcher"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/exporter/exporterqueue"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata"
 )
@@ -41,8 +42,11 @@ func NewFactory() exporter.Factory {
 func createDefaultConfig() component.Config {
 	qs := exporterhelper.NewDefaultQueueSettings()
 	qs.Enabled = false
+	rs := configretry.NewDefaultBackOffConfig()
+	rs.Enabled = false
 	return &Config{
-		QueueSettings: qs,
+		QueueSettings:  qs,
+		RetryOnFailure: rs,
 		ClientConfig: ClientConfig{
 			Timeout: 90 * time.Second,
 		},
@@ -159,6 +163,7 @@ func createLogsRequestExporter(
 				Marshaler:   marshalRequest,
 				Unmarshaler: unmarshalRequest,
 			})),
+		exporterhelper.WithRetry(cf.RetryOnFailure),
 	)
 }
 
