@@ -4,7 +4,8 @@ go 1.21
 
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1
-	github.com/elastic/go-elasticsearch/v7 v7.17.10
+	github.com/elastic/go-docappender v1.0.2-0.20240314140555-68e70bb01f7f
+	github.com/elastic/go-elasticsearch/v8 v8.12.1
 	github.com/elastic/go-structform v0.0.10
 	github.com/lestrrat-go/strftime v1.0.6
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/common v0.96.0
@@ -29,8 +30,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.4.0 // indirect
-	github.com/elastic/go-docappender v1.0.0 // indirect
-	github.com/elastic/go-elasticsearch/v8 v8.12.1 // indirect
 	github.com/elastic/go-sysinfo v1.7.1 // indirect
 	github.com/elastic/go-windows v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
@@ -54,8 +53,8 @@ require (
 	github.com/prometheus/client_model v0.6.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
-	go.elastic.co/apm/module/apmzap/v2 v2.4.8 // indirect
-	go.elastic.co/apm/v2 v2.4.8 // indirect
+	go.elastic.co/apm/module/apmzap/v2 v2.5.0 // indirect
+	go.elastic.co/apm/v2 v2.5.0 // indirect
 	go.elastic.co/fastjson v1.3.0 // indirect
 	go.opentelemetry.io/collector v0.96.1-0.20240306115632-b2693620eff6 // indirect
 	go.opentelemetry.io/collector/config/configretry v0.96.1-0.20240306115632-b2693620eff6 // indirect
@@ -94,7 +93,5 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest => ../../pkg/pdatatest
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => ../../pkg/golden
-
-replace github.com/elastic/go-docappender => github.com/carsonip/go-docappender v1.0.1-0.20240312173335-533abc382d1b
 
 replace go.opentelemetry.io/collector/exporter => go.opentelemetry.io/collector/exporter v0.96.1-0.20240312113120-fbc0ce074899
