@@ -94,4 +94,4 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest 
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => ../../pkg/golden
 
-replace go.opentelemetry.io/collector/exporter => go.opentelemetry.io/collector/exporter v0.96.1-0.20240312113120-fbc0ce074899
+replace go.opentelemetry.io/collector/exporter => go.opentelemetry.io/collector/exporter v0.96.1-0.20240312113120-fbc0ce074899 // FIXME: batchsender is not available in 0.96.0
