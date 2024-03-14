@@ -148,6 +148,7 @@ func createLogsRequestExporter(
 
 	// FIXME: is this right?
 	queueCfg := exporterqueue.NewDefaultConfig()
+	queueCfg.Enabled = cf.QueueSettings.Enabled
 	queueCfg.NumConsumers = cf.QueueSettings.NumConsumers
 	queueCfg.QueueSize = cf.QueueSettings.QueueSize
 
