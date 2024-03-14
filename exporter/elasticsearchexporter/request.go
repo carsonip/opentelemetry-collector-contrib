@@ -4,18 +4,22 @@ import (
 	"bytes"
 	"context"
 	"github.com/elastic/go-docappender"
+	"sync"
 )
 
 type Request struct {
 	bulkIndexer *esBulkIndexerCurrent
+	mu          *sync.Mutex // FIXME: this is a hack to enable batching. TODO: implement pooling
 	Items       []BulkIndexerItem
 }
 
-func NewRequest(bulkIndexer *esBulkIndexerCurrent) *Request {
-	return &Request{bulkIndexer: bulkIndexer}
+func NewRequest(bulkIndexer *esBulkIndexerCurrent, mu *sync.Mutex) *Request {
+	return &Request{bulkIndexer: bulkIndexer, mu: mu}
 }
 
 func (r *Request) Export(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, item := range r.Items {
 		doc := docappender.BulkIndexerItem{
 			Index: item.Index,

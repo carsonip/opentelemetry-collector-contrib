@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -27,6 +28,7 @@ type elasticsearchLogsExporter struct {
 
 	client      *esClientCurrent
 	bulkIndexer *esBulkIndexerCurrent
+	mu          *sync.Mutex
 	model       mappingModel
 }
 
@@ -68,6 +70,7 @@ func newLogsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchLogsExporte
 		logger:      logger,
 		client:      client,
 		bulkIndexer: bulkIndexer,
+		mu:          &sync.Mutex{},
 
 		index:          indexStr,
 		dynamicIndex:   cfg.LogsDynamicIndex.Enabled,
@@ -84,7 +87,7 @@ func (e *elasticsearchLogsExporter) Shutdown(ctx context.Context) error {
 }
 
 func (e *elasticsearchLogsExporter) logsDataToRequest(ctx context.Context, ld plog.Logs) (exporterhelper.Request, error) {
-	request := NewRequest(e.bulkIndexer)
+	request := NewRequest(e.bulkIndexer, e.mu)
 
 	var errs []error
 

@@ -121,7 +121,7 @@ func createLogsRequestExporter(
 	batchMergeFunc := func(ctx context.Context, r1, r2 exporterhelper.Request) (exporterhelper.Request, error) {
 		rr1 := r1.(*Request)
 		rr2 := r2.(*Request)
-		req := NewRequest(logsExporter.bulkIndexer)
+		req := NewRequest(logsExporter.bulkIndexer, logsExporter.mu)
 		req.Items = append(rr1.Items, rr2.Items...)
 		return req, nil
 	}
@@ -141,6 +141,7 @@ func createLogsRequestExporter(
 		var req Request
 		err := json.Unmarshal(b, &req)
 		req.bulkIndexer = logsExporter.bulkIndexer
+		req.mu = logsExporter.mu
 		return &req, err
 	}
 
