@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterbatcher"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
@@ -42,11 +41,8 @@ func NewFactory() exporter.Factory {
 func createDefaultConfig() component.Config {
 	qs := exporterhelper.NewDefaultQueueSettings()
 	qs.Enabled = false
-	rs := configretry.NewDefaultBackOffConfig()
-	rs.Enabled = false
 	return &Config{
-		QueueSettings:  qs,
-		RetryOnFailure: rs,
+		QueueSettings: qs,
 		ClientConfig: ClientConfig{
 			Timeout: 90 * time.Second,
 		},
@@ -166,7 +162,6 @@ func createLogsRequestExporter(
 				Marshaler:   marshalRequest,
 				Unmarshaler: unmarshalRequest,
 			})),
-		exporterhelper.WithRetry(cf.RetryOnFailure), // FIXME: this is useless. retry_sender is ignored by batch_sender
 	)
 }
 
