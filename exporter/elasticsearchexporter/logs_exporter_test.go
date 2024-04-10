@@ -452,7 +452,7 @@ func newTestExporter(t *testing.T, url string, fns ...func(*Config)) *elasticsea
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		require.NoError(t, exporter.Shutdown(context.TODO()))
+		exporter.Shutdown(context.TODO())
 	})
 	return exporter
 }

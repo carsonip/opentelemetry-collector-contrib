@@ -30,10 +30,12 @@ type itemResponse struct {
 	Status int `json:"status"`
 }
 
+type items []itemResponse
+
 type bulkResult struct {
-	Took      int            `json:"took"`
-	HasErrors bool           `json:"errors"`
-	Items     []itemResponse `json:"items"`
+	Took      int   `json:"took"`
+	HasErrors bool  `json:"errors"`
+	Items     items `json:"items"`
 }
 
 type bulkHandler func([]itemRequest) ([]itemResponse, error)
@@ -194,6 +196,26 @@ func handleErr(fn func(http.ResponseWriter, *http.Request) error) http.HandlerFu
 func (item *itemResponse) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, `{"create": {"status": %v}}`, item.Status)
+	return buf.Bytes(), nil
+}
+
+func (it *items) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	first := true
+	for _, item := range *it {
+		if item.Status == http.StatusOK {
+			continue
+		}
+		if !first {
+			buf.WriteString(",")
+		}
+		first = false
+		b, err := item.MarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(b)
+	}
 	return buf.Bytes(), nil
 }
 

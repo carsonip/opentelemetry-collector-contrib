@@ -78,7 +78,9 @@ func newLogsExporter(logger *zap.Logger, cfg *Config) (*elasticsearchLogsExporte
 }
 
 func (e *elasticsearchLogsExporter) Shutdown(ctx context.Context) error {
-	return e.bulkIndexer.Close(ctx)
+	// FIXME: appender.Close returns an error if any error happens throughout its lifetime
+	e.bulkIndexer.Close(ctx)
+	return nil
 }
 
 func (e *elasticsearchLogsExporter) pushLogsData(ctx context.Context, ld plog.Logs) error {

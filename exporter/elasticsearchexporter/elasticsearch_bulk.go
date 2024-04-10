@@ -139,7 +139,7 @@ func newBulkIndexer(logger *zap.Logger, client *elasticsearch7.Client, config *C
 		Tracer:             nil,
 		CompressionLevel:   0,
 		MaxRequests:        0,
-		MaxDocumentRetries: 0, //config.Retry.MaxRequests,
+		MaxDocumentRetries: config.Retry.MaxRequests,
 		FlushBytes:         config.Flush.Bytes,
 		FlushInterval:      config.Flush.Interval,
 		FlushTimeout:       config.Timeout,
