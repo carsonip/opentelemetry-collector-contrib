@@ -143,7 +143,7 @@ func newBulkIndexer(logger *zap.Logger, client *elasticsearch7.Client, config *C
 		FlushBytes:         config.Flush.Bytes,
 		FlushInterval:      config.Flush.Interval,
 		FlushTimeout:       config.Timeout,
-		DocumentBufferSize: config.WriteBufferSize,
+		DocumentBufferSize: 0,
 		Scaling: docappender.ScalingConfig{
 			Disabled:     false,
 			ActiveRatio:  1,
