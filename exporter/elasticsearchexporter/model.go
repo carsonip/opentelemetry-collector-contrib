@@ -485,7 +485,7 @@ func (m *encodeModel) encodeSpan(resource pcommon.Resource, resourceSchemaURL st
 	}
 	document.Dedup()
 	var buf bytes.Buffer
-	err := document.Serialize(&buf, m.dedot, false)
+	err := document.Serialize(&buf, m.dedot, m.mode == MappingOTel)
 	return buf.Bytes(), err
 }
 
