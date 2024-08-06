@@ -352,20 +352,8 @@ func (m *encodeModel) upsertMetricDataPointValueOTelMode(documents map[uint32]ob
 		// updated by the router.
 		// Move them to the top of the document and remove them from the record
 		attributeMap := dp.Attributes()
-
-		forEachDataStreamKey := func(fn func(key string)) {
-			for _, key := range datastreamKeys {
-				fn(key)
-			}
-		}
-
-		forEachDataStreamKey(func(key string) {
-			if value, exists := attributeMap.Get(key); exists {
-				document.AddAttribute(key, value)
-				attributeMap.Remove(key)
-			}
-		})
-
+		addDataStreamAttributes(&document, attributeMap)
+		stripDataStreamAttributes(attributeMap)
 		document.AddAttributes("attributes", attributeMap)
 
 		// Resource
@@ -376,12 +364,7 @@ func (m *encodeModel) upsertMetricDataPointValueOTelMode(documents map[uint32]ob
 		resourceAttrMap := resourceMap.PutEmptyMap("attributes")
 
 		resource.Attributes().CopyTo(resourceAttrMap)
-
-		// Remove data_stream attributes from the resources attributes if present
-		forEachDataStreamKey(func(key string) {
-			resourceAttrMap.Remove(key)
-		})
-
+		stripDataStreamAttributes(resourceAttrMap)
 		document.Add("resource", objmodel.ValueFromAttribute(resourceMapVal))
 
 		// Scope
@@ -403,11 +386,7 @@ func (m *encodeModel) upsertMetricDataPointValueOTelMode(documents map[uint32]ob
 		if scopeAttributes.Len() > 0 {
 			scopeAttrMap := scopeMap.PutEmptyMap("attributes")
 			scopeAttributes.CopyTo(scopeAttrMap)
-
-			// Remove data_stream attributes from the scope attributes if present
-			forEachDataStreamKey(func(key string) {
-				scopeAttrMap.Remove(key)
-			})
+			stripDataStreamAttributes(scopeAttrMap)
 		}
 
 		if scopeMap.Len() > 0 {
