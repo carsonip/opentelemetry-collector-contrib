@@ -522,7 +522,7 @@ func (m *encodeModel) encodeSpanOTelMode(resource pcommon.Resource, resourceSche
 		mAttr := linkMap.PutEmptyMap("attributes")
 		spanLink.Attributes().CopyTo(mAttr)
 		linkMap.PutInt("dropped_attributes_count", int64(spanLink.DroppedAttributesCount()))
-		linkMap.PutInt("trace_flags", int64(spanLink.DroppedAttributesCount()))
+		linkMap.PutInt("trace_flags", int64(spanLink.Flags()))
 	}
 	document.AddAttribute("links", links)
 
