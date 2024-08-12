@@ -307,7 +307,7 @@ func (doc *Document) iterJSONFlat(w *json.Visitor, otel bool) error {
 // for current use cases and the proper fix will be slightly too complex. YAGNI.
 var otelPrefixSet = map[string]struct{}{
 	"attributes.": {},
-	"metrics.": {},
+	"metrics.":    {},
 }
 
 func (doc *Document) iterJSONDedot(w *json.Visitor, otel bool) error {
