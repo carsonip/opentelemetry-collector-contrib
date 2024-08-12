@@ -940,39 +940,6 @@ func TestExporterTraces(t *testing.T) {
 		))
 		rec.WaitItems(1)
 	})
-
-	t.Run("otel mode", func(t *testing.T) {
-		rec := newBulkRecorder()
-		server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
-			rec.Record(docs)
-			return itemsAllOK(docs)
-		})
-
-		exporter := newTestTracesExporter(t, server.URL, func(cfg *Config) {
-			cfg.TracesDynamicIndex.Enabled = true
-			cfg.Mapping.Mode = "otel"
-		})
-
-		mustSendTraces(t, exporter, newTracesWithAttributeAndResourceMap(
-			map[string]string{
-				"attr.foo": "attr.bar",
-			},
-			map[string]string{
-				"resource.foo": "resource.bar",
-			},
-		))
-
-		rec.WaitItems(1)
-
-		expected := []itemRequest{
-			{
-				Action:   []byte(`{"create":{"_index":"traces-generic.otel-default"}}`),
-				Document: []byte(`{"@timestamp":"1970-01-01T00:00:00.000000000Z","attributes":{"attr.foo":"attr.bar"},"data_stream":{"dataset":"generic.otel","namespace":"default","type":"traces"},"dropped_attributes_count":0,"dropped_events_count":0,"dropped_links_count":0,"duration":0,"kind":"SPAN_KIND_UNSPECIFIED","resource":{"attributes":{"resource.foo":"resource.bar"},"dropped_attributes_count":0,"schema_url":""},"status":{"code":"Unset","message":""},"trace_flags":0}`),
-			},
-		}
-
-		assertItemsEqual(t, expected, rec.Items(), false)
-	})
 }
 
 // TestExporterAuth verifies that the Elasticsearch exporter supports

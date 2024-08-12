@@ -166,11 +166,6 @@ func (doc *Document) AddInt(key string, value int64) {
 	doc.Add(key, IntValue(value))
 }
 
-// AddBool adds a bool value to the document.
-func (doc *Document) AddBool(key string, value bool) {
-	doc.Add(key, BoolValue(value))
-}
-
 // AddAttributes expands and flattens all key-value pairs from the input attribute map into
 // the document.
 func (doc *Document) AddAttributes(key string, attributes pcommon.Map) {
