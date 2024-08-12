@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -32,6 +33,7 @@ type elasticsearchExporter struct {
 	model          mappingModel
 	otel           bool
 
+	wg          sync.WaitGroup // active sessions
 	bulkIndexer bulkIndexer
 }
 
@@ -88,12 +90,28 @@ func (e *elasticsearchExporter) Start(ctx context.Context, host component.Host) 
 
 func (e *elasticsearchExporter) Shutdown(ctx context.Context) error {
 	if e.bulkIndexer != nil {
-		return e.bulkIndexer.Close(ctx)
+		if err := e.bulkIndexer.Close(ctx); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	doneCh := make(chan struct{})
+	go func() {
+		e.wg.Wait()
+		close(doneCh)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-doneCh:
+		return nil
+	}
 }
 
 func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) error {
+	e.wg.Add(1)
+	defer e.wg.Done()
+
 	session, err := e.bulkIndexer.StartSession(ctx)
 	if err != nil {
 		return err
@@ -164,6 +182,9 @@ func (e *elasticsearchExporter) pushMetricsData(
 	ctx context.Context,
 	metrics pmetric.Metrics,
 ) error {
+	e.wg.Add(1)
+	defer e.wg.Done()
+
 	session, err := e.bulkIndexer.StartSession(ctx)
 	if err != nil {
 		return err
@@ -303,6 +324,9 @@ func (e *elasticsearchExporter) pushTraceData(
 	ctx context.Context,
 	td ptrace.Traces,
 ) error {
+	e.wg.Add(1)
+	defer e.wg.Done()
+
 	session, err := e.bulkIndexer.StartSession(ctx)
 	if err != nil {
 		return err
@@ -321,7 +345,7 @@ func (e *elasticsearchExporter) pushTraceData(
 			spans := scopeSpan.Spans()
 			for k := 0; k < spans.Len(); k++ {
 				span := spans.At(k)
-				if err := e.pushTraceRecord(ctx, resource, span, scope, session); err != nil {
+				if err := e.pushTraceRecord(ctx, resource, il.SchemaUrl(), span, scope, scopeSpan.SchemaUrl(), session); err != nil {
 					if cerr := ctx.Err(); cerr != nil {
 						return cerr
 					}
@@ -343,8 +367,10 @@ func (e *elasticsearchExporter) pushTraceData(
 func (e *elasticsearchExporter) pushTraceRecord(
 	ctx context.Context,
 	resource pcommon.Resource,
+	resourceSchemaURL string,
 	span ptrace.Span,
 	scope pcommon.InstrumentationScope,
+	scopeSchemaURL string,
 	bulkIndexerSession bulkIndexerSession,
 ) error {
 	fIndex := e.index
@@ -360,7 +386,7 @@ func (e *elasticsearchExporter) pushTraceRecord(
 		fIndex = formattedIndex
 	}
 
-	document, err := e.model.encodeSpan(resource, span, scope)
+	document, err := e.model.encodeSpan(resource, resourceSchemaURL, span, scope, scopeSchemaURL)
 	if err != nil {
 		return fmt.Errorf("failed to encode trace record: %w", err)
 	}
