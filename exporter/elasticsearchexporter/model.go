@@ -324,12 +324,13 @@ func (m *encodeModel) upsertMetricDataPointValueOTelMode(documents map[uint32]ob
 
 	switch value.Type() {
 	case pcommon.ValueTypeMap:
-		histogramMap := pcommon.NewMap()
-		value.Map().CopyTo(histogramMap)
-		document.Add("metrics."+metric.Name(), objmodel.ComplexObjectValue(histogramMap))
+		m := pcommon.NewMap()
+		value.Map().CopyTo(m)
+		document.Add("metrics."+metric.Name(), objmodel.UnflattenableObjectValue(m))
 	default:
 		document.Add("metrics."+metric.Name(), objmodel.ValueFromAttribute(value))
 	}
+	// FIXME: support quantiles
 
 	document.AddDynamicTemplate("metrics."+metric.Name(), metricDpToDynamicTemplate(metric, dp))
 	documents[hash] = document
@@ -350,7 +351,8 @@ func metricDpToDynamicTemplate(metric pmetric.Metric, dp dataPoint) string {
 				return "counter_long"
 			}
 			return "gauge_long"
-			// FIXME: NumberDataPointValueTypeEmpty handling
+		default:
+			return "" // NumberDataPointValueTypeEmpty should already be discarded in numberToValue
 		}
 	case pmetric.MetricTypeGauge:
 		switch dp.(pmetric.NumberDataPoint).ValueType() {
@@ -358,15 +360,25 @@ func metricDpToDynamicTemplate(metric pmetric.Metric, dp dataPoint) string {
 			return "gauge_double"
 		case pmetric.NumberDataPointValueTypeInt:
 			return "gauge_long"
-			// FIXME: NumberDataPointValueTypeEmpty handling
+		default:
+			return "" // NumberDataPointValueTypeEmpty should already be discarded in numberToValue
 		}
 	case pmetric.MetricTypeHistogram, pmetric.MetricTypeExponentialHistogram:
 		return "histogram"
 	case pmetric.MetricTypeSummary:
-		// FIXME: summary_gauge / summary_counter
-		//return "aggregate_metric_double"
+		return "summary_gauge"
 	}
 	return ""
+}
+
+func summaryToValue(dp pmetric.SummaryDataPoint) pcommon.Value {
+	// TODO: Add support for quantiles
+	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/34561
+	vm := pcommon.NewValueMap()
+	m := vm.Map()
+	m.PutDouble("sum", dp.Sum())
+	m.PutInt("value_count", int64(dp.Count()))
+	return vm
 }
 
 func histogramToValue(dp pmetric.HistogramDataPoint) (pcommon.Value, error) {
