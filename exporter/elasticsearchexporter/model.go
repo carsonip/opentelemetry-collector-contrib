@@ -270,19 +270,21 @@ func (m *encodeModel) encodeDocument(document objmodel.Document) ([]byte, error)
 	return buf.Bytes(), nil
 }
 
+// upsertMetricDataPointValue upserts a datapoint value to documents which is already hashed by resource and index
 func (m *encodeModel) upsertMetricDataPointValue(documents map[uint32]objmodel.Document, resource pcommon.Resource, resourceSchemaURL string, scope pcommon.InstrumentationScope, scopeSchemaURL string, metric pmetric.Metric, dp dataPoint, value pcommon.Value) error {
 	switch m.mode {
-	case MappingECS:
-		return m.upsertMetricDataPointValueECSMode(documents, resource, resourceSchemaURL, scope, scopeSchemaURL, metric, dp, value)
 	case MappingOTel:
 		return m.upsertMetricDataPointValueOTelMode(documents, resource, resourceSchemaURL, scope, scopeSchemaURL, metric, dp, value)
+	case MappingECS:
+		return m.upsertMetricDataPointValueECSMode(documents, resource, resourceSchemaURL, scope, scopeSchemaURL, metric, dp, value)
 	default:
-		return errors.New("unsupported mode")
+		// Defaults to ECS for backward compatibility
+		return m.upsertMetricDataPointValueECSMode(documents, resource, resourceSchemaURL, scope, scopeSchemaURL, metric, dp, value)
 	}
 }
 
-func (m *encodeModel) upsertMetricDataPointValueECSMode(documents map[uint32]objmodel.Document, resource pcommon.Resource, resourceSchemaURL string, _ pcommon.InstrumentationScope, scopeSchemaUrl string, metric pmetric.Metric, dp dataPoint, value pcommon.Value) error {
-	hash := metricHash(dp.Timestamp(), dp.Attributes())
+func (m *encodeModel) upsertMetricDataPointValueECSMode(documents map[uint32]objmodel.Document, resource pcommon.Resource, _ string, _ pcommon.InstrumentationScope, _ string, metric pmetric.Metric, dp dataPoint, value pcommon.Value) error {
+	hash := metricECSHash(dp.Timestamp(), dp.Attributes())
 	var (
 		document objmodel.Document
 		ok       bool
@@ -330,13 +332,18 @@ func (m *encodeModel) upsertMetricDataPointValueOTelMode(documents map[uint32]ob
 	default:
 		document.Add("metrics."+metric.Name(), objmodel.ValueFromAttribute(value))
 	}
-	// FIXME: support quantiles
+	// TODO: support quantiles
+	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/34561
 
 	document.AddDynamicTemplate("metrics."+metric.Name(), metricDpToDynamicTemplate(metric, dp))
 	documents[hash] = document
 	return nil
 }
 
+// metricDpToDynamicTemplate returns the name of dynamic template that applies to the metric and data point,
+// so that the field is indexed into Elasticsearch with the correct mapping. The name should correspond to a
+// dynamic template that is defined in ES mapping, e.g.
+// https://github.com/elastic/elasticsearch/blob/8.15/x-pack/plugin/core/template-resources/src/main/resources/metrics%40mappings.json
 func metricDpToDynamicTemplate(metric pmetric.Metric, dp dataPoint) string {
 	switch metric.Type() {
 	case pmetric.MetricTypeSum:
@@ -729,14 +736,14 @@ func encodeLogTimestampECSMode(document *objmodel.Document, record plog.LogRecor
 }
 
 // TODO use https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/internal/exp/metrics/identity
-func metricHash(timestamp pcommon.Timestamp, attributes pcommon.Map) uint32 {
+func metricECSHash(timestamp pcommon.Timestamp, attributes pcommon.Map) uint32 {
 	hasher := fnv.New32a()
 
 	timestampBuf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(timestampBuf, uint64(timestamp))
 	hasher.Write(timestampBuf)
 
-	mapHash(hasher, attributes)
+	mapHashExcludeDataStreamAttr(hasher, attributes)
 
 	return hasher.Sum32()
 }
@@ -753,10 +760,25 @@ func metricOTelHash(dp dataPoint, scopeAttrs pcommon.Map, unit string) uint32 {
 
 	hasher.Write([]byte(unit))
 
-	mapHash(hasher, scopeAttrs)
-	mapHash(hasher, dp.Attributes())
+	mapHashExcludeDataStreamAttr(hasher, scopeAttrs)
+	mapHashExcludeDataStreamAttr(hasher, dp.Attributes())
 
 	return hasher.Sum32()
+}
+
+// mapHashExcludeDataStreamAttr is mapHash but ignoring DS attributes.
+// It is useful for cases where index is already considered during routing and no need to be considered in hashing.
+func mapHashExcludeDataStreamAttr(hasher hash.Hash, m pcommon.Map) {
+	m.Range(func(k string, v pcommon.Value) bool {
+		switch k {
+		case dataStreamType, dataStreamDataset, dataStreamNamespace:
+			return true
+		}
+		hasher.Write([]byte(k))
+		valueHash(hasher, v)
+
+		return true
+	})
 }
 
 func mapHash(hasher hash.Hash, m pcommon.Map) {
