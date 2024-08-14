@@ -284,11 +284,7 @@ func (m *encodeModel) upsertMetricDataPointValueOTelMode(documents map[uint32]ob
 		}
 		document.AddString("unit", metric.Unit())
 
-		attributeMap := dp.Attributes()
-		addDataStreamAttributes(&document, attributeMap)
-		stripDataStreamAttributes(attributeMap)
-		document.AddAttributes("attributes", attributeMap)
-
+		m.encodeAttributes(&document, dp.Attributes())
 		m.encodeResourceOTelMode(&document, resource, resourceSchemaURL)
 		m.encodeScopeOTelMode(&document, scope, scopeSchemaURL)
 	}
