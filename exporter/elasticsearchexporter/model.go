@@ -67,7 +67,7 @@ type mappingModel interface {
 	encodeLog(pcommon.Resource, string, plog.LogRecord, pcommon.InstrumentationScope, string) ([]byte, error)
 	encodeSpan(pcommon.Resource, string, ptrace.Span, pcommon.InstrumentationScope, string) ([]byte, error)
 	encodeSpanEvent(resource pcommon.Resource, resourceSchemaURL string, span ptrace.Span, spanEvent ptrace.SpanEvent, scope pcommon.InstrumentationScope, scopeSchemaURL string) *objmodel.Document
-	upsertMetricDataPointValue(map[uint32]objmodel.Document, pcommon.Resource, pcommon.InstrumentationScope, pmetric.Metric, dataPoint, pcommon.Value) error
+	upsertMetricDataPointValue(map[uint32]objmodel.Document, pcommon.Resource, string, pcommon.InstrumentationScope, string, pmetric.Metric, dataPoint, pcommon.Value) error
 	encodeDocument(objmodel.Document) ([]byte, error)
 }
 
@@ -84,6 +84,7 @@ type encodeModel struct {
 
 type dataPoint interface {
 	Timestamp() pcommon.Timestamp
+	StartTimestamp() pcommon.Timestamp
 	Attributes() pcommon.Map
 }
 
@@ -239,8 +240,21 @@ func (m *encodeModel) encodeDocument(document objmodel.Document) ([]byte, error)
 	return buf.Bytes(), nil
 }
 
-func (m *encodeModel) upsertMetricDataPointValue(documents map[uint32]objmodel.Document, resource pcommon.Resource, _ pcommon.InstrumentationScope, metric pmetric.Metric, dp dataPoint, value pcommon.Value) error {
-	hash := metricHash(dp.Timestamp(), dp.Attributes())
+// upsertMetricDataPointValue upserts a datapoint value to documents which is already hashed by resource and index
+func (m *encodeModel) upsertMetricDataPointValue(documents map[uint32]objmodel.Document, resource pcommon.Resource, resourceSchemaURL string, scope pcommon.InstrumentationScope, scopeSchemaURL string, metric pmetric.Metric, dp dataPoint, value pcommon.Value) error {
+	switch m.mode {
+	case MappingOTel:
+		return m.upsertMetricDataPointValueOTelMode(documents, resource, resourceSchemaURL, scope, scopeSchemaURL, metric, dp, value)
+	case MappingECS:
+		return m.upsertMetricDataPointValueECSMode(documents, resource, resourceSchemaURL, scope, scopeSchemaURL, metric, dp, value)
+	default:
+		// Defaults to ECS for backward compatibility
+		return m.upsertMetricDataPointValueECSMode(documents, resource, resourceSchemaURL, scope, scopeSchemaURL, metric, dp, value)
+	}
+}
+
+func (m *encodeModel) upsertMetricDataPointValueECSMode(documents map[uint32]objmodel.Document, resource pcommon.Resource, _ string, _ pcommon.InstrumentationScope, _ string, metric pmetric.Metric, dp dataPoint, value pcommon.Value) error {
+	hash := metricECSHash(dp.Timestamp(), dp.Attributes())
 	var (
 		document objmodel.Document
 		ok       bool
@@ -255,6 +269,89 @@ func (m *encodeModel) upsertMetricDataPointValue(documents map[uint32]objmodel.D
 
 	documents[hash] = document
 	return nil
+}
+
+func (m *encodeModel) upsertMetricDataPointValueOTelMode(documents map[uint32]objmodel.Document, resource pcommon.Resource, resourceSchemaURL string, scope pcommon.InstrumentationScope, scopeSchemaURL string, metric pmetric.Metric, dp dataPoint, value pcommon.Value) error {
+	// documents is per-resource. Therefore, there is no need to hash resource attributes
+	hash := metricOTelHash(dp, scope.Attributes(), metric.Unit())
+	var (
+		document objmodel.Document
+		ok       bool
+	)
+	if document, ok = documents[hash]; !ok {
+		document.AddTimestamp("@timestamp", dp.Timestamp())
+		if dp.StartTimestamp() != 0 {
+			document.AddTimestamp("start_timestamp", dp.StartTimestamp())
+		}
+		document.AddString("unit", metric.Unit())
+
+		m.encodeAttributesOTelMode(&document, dp.Attributes())
+		m.encodeResourceOTelMode(&document, resource, resourceSchemaURL)
+		m.encodeScopeOTelMode(&document, scope, scopeSchemaURL)
+	}
+
+	switch value.Type() {
+	case pcommon.ValueTypeMap:
+		m := pcommon.NewMap()
+		value.Map().CopyTo(m)
+		document.Add("metrics."+metric.Name(), objmodel.UnflattenableObjectValue(m))
+	default:
+		document.Add("metrics."+metric.Name(), objmodel.ValueFromAttribute(value))
+	}
+	// TODO: support quantiles
+	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/34561
+
+	document.AddDynamicTemplate("metrics."+metric.Name(), metricDpToDynamicTemplate(metric, dp))
+	documents[hash] = document
+	return nil
+}
+
+// metricDpToDynamicTemplate returns the name of dynamic template that applies to the metric and data point,
+// so that the field is indexed into Elasticsearch with the correct mapping. The name should correspond to a
+// dynamic template that is defined in ES mapping, e.g.
+// https://github.com/elastic/elasticsearch/blob/8.15/x-pack/plugin/core/template-resources/src/main/resources/metrics%40mappings.json
+func metricDpToDynamicTemplate(metric pmetric.Metric, dp dataPoint) string {
+	switch metric.Type() {
+	case pmetric.MetricTypeSum:
+		switch dp.(pmetric.NumberDataPoint).ValueType() {
+		case pmetric.NumberDataPointValueTypeDouble:
+			if metric.Sum().IsMonotonic() {
+				return "counter_double"
+			}
+			return "gauge_double"
+		case pmetric.NumberDataPointValueTypeInt:
+			if metric.Sum().IsMonotonic() {
+				return "counter_long"
+			}
+			return "gauge_long"
+		default:
+			return "" // NumberDataPointValueTypeEmpty should already be discarded in numberToValue
+		}
+	case pmetric.MetricTypeGauge:
+		switch dp.(pmetric.NumberDataPoint).ValueType() {
+		case pmetric.NumberDataPointValueTypeDouble:
+			return "gauge_double"
+		case pmetric.NumberDataPointValueTypeInt:
+			return "gauge_long"
+		default:
+			return "" // NumberDataPointValueTypeEmpty should already be discarded in numberToValue
+		}
+	case pmetric.MetricTypeHistogram, pmetric.MetricTypeExponentialHistogram:
+		return "histogram"
+	case pmetric.MetricTypeSummary:
+		return "summary_metrics"
+	}
+	return ""
+}
+
+func summaryToValue(dp pmetric.SummaryDataPoint) pcommon.Value {
+	// TODO: Add support for quantiles
+	// https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/34561
+	vm := pcommon.NewValueMap()
+	m := vm.Map()
+	m.PutDouble("sum", dp.Sum())
+	m.PutInt("value_count", int64(dp.Count()))
+	return vm
 }
 
 func histogramToValue(dp pmetric.HistogramDataPoint) (pcommon.Value, error) {
@@ -353,24 +450,17 @@ func (m *encodeModel) encodeScopeOTelMode(document *objmodel.Document, scope pco
 	if scopeSchemaURL != "" {
 		scopeMap.PutStr("schema_url", scopeSchemaURL)
 	}
-	if scope.DroppedAttributesCount() > 0 {
-		scopeMap.PutInt("dropped_attributes_count", int64(scope.DroppedAttributesCount()))
-	}
-	scopeAttributes := scope.Attributes()
-	if scopeAttributes.Len() > 0 {
-		scopeAttrMap := scopeMap.PutEmptyMap("attributes")
-		scopeAttributes.CopyTo(scopeAttrMap)
-		scopeAttrMap.RemoveIf(func(key string, _ pcommon.Value) bool {
-			switch key {
-			case dataStreamType, dataStreamDataset, dataStreamNamespace:
-				return true
-			}
-			return false
-		})
-	}
-	if scopeMap.Len() > 0 {
-		document.Add("scope", objmodel.ValueFromAttribute(scopeMapVal))
-	}
+	scopeMap.PutInt("dropped_attributes_count", int64(scope.DroppedAttributesCount()))
+	scopeAttrMap := scopeMap.PutEmptyMap("attributes")
+	scope.Attributes().CopyTo(scopeAttrMap)
+	scopeAttrMap.RemoveIf(func(key string, _ pcommon.Value) bool {
+		switch key {
+		case dataStreamType, dataStreamDataset, dataStreamNamespace:
+			return true
+		}
+		return false
+	})
+	document.Add("scope", objmodel.ValueFromAttribute(scopeMapVal))
 }
 
 func (m *encodeModel) encodeAttributesOTelMode(document *objmodel.Document, attributeMap pcommon.Map) {
@@ -648,16 +738,49 @@ func encodeLogTimestampECSMode(document *objmodel.Document, record plog.LogRecor
 }
 
 // TODO use https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/internal/exp/metrics/identity
-func metricHash(timestamp pcommon.Timestamp, attributes pcommon.Map) uint32 {
+func metricECSHash(timestamp pcommon.Timestamp, attributes pcommon.Map) uint32 {
 	hasher := fnv.New32a()
 
 	timestampBuf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(timestampBuf, uint64(timestamp))
 	hasher.Write(timestampBuf)
 
-	mapHash(hasher, attributes)
+	mapHashExcludeDataStreamAttr(hasher, attributes)
 
 	return hasher.Sum32()
+}
+
+func metricOTelHash(dp dataPoint, scopeAttrs pcommon.Map, unit string) uint32 {
+	hasher := fnv.New32a()
+
+	timestampBuf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(timestampBuf, uint64(dp.Timestamp()))
+	hasher.Write(timestampBuf)
+
+	binary.LittleEndian.PutUint64(timestampBuf, uint64(dp.StartTimestamp()))
+	hasher.Write(timestampBuf)
+
+	hasher.Write([]byte(unit))
+
+	mapHashExcludeDataStreamAttr(hasher, scopeAttrs)
+	mapHashExcludeDataStreamAttr(hasher, dp.Attributes())
+
+	return hasher.Sum32()
+}
+
+// mapHashExcludeDataStreamAttr is mapHash but ignoring DS attributes.
+// It is useful for cases where index is already considered during routing and no need to be considered in hashing.
+func mapHashExcludeDataStreamAttr(hasher hash.Hash, m pcommon.Map) {
+	m.Range(func(k string, v pcommon.Value) bool {
+		switch k {
+		case dataStreamType, dataStreamDataset, dataStreamNamespace:
+			return true
+		}
+		hasher.Write([]byte(k))
+		valueHash(hasher, v)
+
+		return true
+	})
 }
 
 func mapHash(hasher hash.Hash, m pcommon.Map) {
