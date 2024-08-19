@@ -494,6 +494,14 @@ func (m *encodeModel) encodeSpan(resource pcommon.Resource, resourceSchemaURL st
 	return buf.Bytes(), err
 }
 
+func (m *encodeModel) workaroundKibanaUnderscoreSourceUsage(document *objmodel.Document, resource pcommon.Resource, resourceSchemaURL string, span ptrace.Span, scope pcommon.InstrumentationScope, scopeSchemaURL string) {
+	// Add some unmapped top level fields so that they appear in _source
+	document.AddTraceID("trace.id", span.TraceID())
+	if v, ok := span.Attributes().Get("transaction.id"); ok {
+		document.AddString("transaction.id", v.Str())
+	}
+}
+
 func (m *encodeModel) encodeSpanOTelMode(resource pcommon.Resource, resourceSchemaURL string, span ptrace.Span, scope pcommon.InstrumentationScope, scopeSchemaURL string) objmodel.Document {
 	var document objmodel.Document
 	document.AddTimestamp("@timestamp", span.StartTimestamp())
@@ -531,6 +539,9 @@ func (m *encodeModel) encodeSpanOTelMode(resource pcommon.Resource, resourceSche
 
 	m.encodeResourceOTelMode(&document, resource, resourceSchemaURL)
 	m.encodeScopeOTelMode(&document, scope, scopeSchemaURL)
+
+	// FIXME: workaround
+	m.workaroundKibanaUnderscoreSourceUsage(&document, resource, resourceSchemaURL, span, scope, scopeSchemaURL)
 
 	return document
 }
