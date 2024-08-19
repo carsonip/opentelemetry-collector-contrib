@@ -66,7 +66,6 @@ var resourceAttrsToPreserve = map[string]bool{
 type mappingModel interface {
 	encodeLog(pcommon.Resource, string, plog.LogRecord, pcommon.InstrumentationScope, string) ([]byte, error)
 	encodeSpan(pcommon.Resource, string, ptrace.Span, pcommon.InstrumentationScope, string) ([]byte, error)
-	encodeSpanEvent(resource pcommon.Resource, resourceSchemaURL string, span ptrace.Span, spanEvent ptrace.SpanEvent, scope pcommon.InstrumentationScope, scopeSchemaURL string) *objmodel.Document
 	upsertMetricDataPointValue(map[uint32]objmodel.Document, pcommon.Resource, string, pcommon.InstrumentationScope, string, pmetric.Metric, dataPoint, pcommon.Value) error
 	encodeDocument(objmodel.Document) ([]byte, error)
 }
@@ -450,30 +449,21 @@ func (m *encodeModel) encodeScopeOTelMode(document *objmodel.Document, scope pco
 	if scopeSchemaURL != "" {
 		scopeMap.PutStr("schema_url", scopeSchemaURL)
 	}
-	if scope.DroppedAttributesCount() > 0 {
-		scopeMap.PutInt("dropped_attributes_count", int64(scope.DroppedAttributesCount()))
-	}
-	scopeAttributes := scope.Attributes()
-	if scopeAttributes.Len() > 0 {
-		scopeAttrMap := scopeMap.PutEmptyMap("attributes")
-		scopeAttributes.CopyTo(scopeAttrMap)
-		scopeAttrMap.RemoveIf(func(key string, _ pcommon.Value) bool {
-			switch key {
-			case dataStreamType, dataStreamDataset, dataStreamNamespace:
-				return true
-			}
-			return false
-		})
-	}
-	if scopeMap.Len() > 0 {
-		document.Add("scope", objmodel.ValueFromAttribute(scopeMapVal))
-	}
+	scopeMap.PutInt("dropped_attributes_count", int64(scope.DroppedAttributesCount()))
+	scopeAttrMap := scopeMap.PutEmptyMap("attributes")
+	scope.Attributes().CopyTo(scopeAttrMap)
+	scopeAttrMap.RemoveIf(func(key string, _ pcommon.Value) bool {
+		switch key {
+		case dataStreamType, dataStreamDataset, dataStreamNamespace:
+			return true
+		}
+		return false
+	})
+	document.Add("scope", objmodel.ValueFromAttribute(scopeMapVal))
 }
 
 func (m *encodeModel) encodeAttributesOTelMode(document *objmodel.Document, attributeMap pcommon.Map) {
-	attrsCopy := pcommon.NewMap() // Copy to avoid mutating original map
-	attributeMap.CopyTo(attrsCopy)
-	attrsCopy.RemoveIf(func(key string, val pcommon.Value) bool {
+	attributeMap.RemoveIf(func(key string, val pcommon.Value) bool {
 		switch key {
 		case dataStreamType, dataStreamDataset, dataStreamNamespace:
 			// At this point the data_stream attributes are expected to be in the record attributes,
@@ -484,7 +474,7 @@ func (m *encodeModel) encodeAttributesOTelMode(document *objmodel.Document, attr
 		}
 		return false
 	})
-	document.AddAttributes("attributes", attrsCopy)
+	document.AddAttributes("attributes", attributeMap)
 }
 
 func (m *encodeModel) encodeSpan(resource pcommon.Resource, resourceSchemaURL string, span ptrace.Span, scope pcommon.InstrumentationScope, scopeSchemaURL string) ([]byte, error) {
@@ -539,6 +529,8 @@ func (m *encodeModel) encodeSpanOTelMode(resource pcommon.Resource, resourceSche
 	m.encodeResourceOTelMode(&document, resource, resourceSchemaURL)
 	m.encodeScopeOTelMode(&document, scope, scopeSchemaURL)
 
+	// TODO: add span events to log data streams
+
 	return document
 }
 
@@ -560,25 +552,6 @@ func (m *encodeModel) encodeSpanDefaultMode(resource pcommon.Resource, span ptra
 	document.AddInt("Duration", durationAsMicroseconds(span.StartTimestamp().AsTime(), span.EndTimestamp().AsTime())) // unit is microseconds
 	document.AddAttributes("Scope", scopeToAttributes(scope))
 	return document
-}
-
-func (m *encodeModel) encodeSpanEvent(resource pcommon.Resource, resourceSchemaURL string, span ptrace.Span, spanEvent ptrace.SpanEvent, scope pcommon.InstrumentationScope, scopeSchemaURL string) *objmodel.Document {
-	if m.mode != MappingOTel {
-		return nil
-	}
-	var document objmodel.Document
-	document.AddTimestamp("@timestamp", spanEvent.Timestamp())
-	document.AddString("name", spanEvent.Name())
-	document.AddSpanID("span_id", span.SpanID())
-	document.AddTraceID("trace_id", span.TraceID())
-	document.AddInt("dropped_attributes_count", int64(spanEvent.DroppedAttributesCount()))
-
-	// FIXME: what about span attributes?
-	m.encodeAttributesOTelMode(&document, spanEvent.Attributes())
-	m.encodeResourceOTelMode(&document, resource, resourceSchemaURL)
-	m.encodeScopeOTelMode(&document, scope, scopeSchemaURL)
-
-	return &document
 }
 
 func (m *encodeModel) encodeAttributes(document *objmodel.Document, attributes pcommon.Map) {
