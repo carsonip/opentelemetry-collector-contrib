@@ -441,5 +441,5 @@ func (e *elasticsearchExporter) pushSpanEvent(
 	if err != nil {
 		return err
 	}
-	return bulkIndexerSession.Add(ctx, fIndex, bytes.NewReader(docBytes))
+	return bulkIndexerSession.Add(ctx, fIndex, bytes.NewReader(docBytes), nil)
 }

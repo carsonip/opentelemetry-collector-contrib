@@ -1096,7 +1096,7 @@ func TestExporterTraces(t *testing.T) {
 			},
 			{
 				Action:   []byte(`{"create":{"_index":"logs-generic.otel-default"}}`),
-				Document: []byte(`{"@timestamp":"1970-01-01T00:00:00.000000000Z","attributes":{"event.attr.foo":"event.attr.bar"},"data_stream":{"dataset":"generic.otel","namespace":"default","type":"logs"},"dropped_attributes_count":1,"name":"exception","resource":{"attributes":{"resource.foo":"resource.bar"},"dropped_attributes_count":0}}`),
+				Document: []byte(`{"@timestamp":"1970-01-01T00:00:00.000000000Z","attributes":{"event.attr.foo":"event.attr.bar"},"data_stream":{"dataset":"generic.otel","namespace":"default","type":"logs"},"dropped_attributes_count":1,"name":"exception","resource":{"attributes":{"resource.foo":"resource.bar"},"dropped_attributes_count":0},"scope":{"dropped_attributes_count":0}}`),
 			},
 		}
 
