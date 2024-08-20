@@ -496,6 +496,7 @@ func (m *encodeModel) encodeSpan(resource pcommon.Resource, resourceSchemaURL st
 
 func (m *encodeModel) workaroundKibanaUnderscoreSourceUsage(document *objmodel.Document, resource pcommon.Resource, resourceSchemaURL string, span ptrace.Span, scope pcommon.InstrumentationScope, scopeSchemaURL string) {
 	// Add some unmapped top level fields so that they appear in _source
+	// FIXME: this will not work anyway due to dynamic: runtime and synthetic source
 	document.AddTraceID("trace.id", span.TraceID())
 	if v, ok := span.Attributes().Get("transaction.id"); ok {
 		document.AddString("transaction.id", v.Str())
