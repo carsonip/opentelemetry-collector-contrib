@@ -91,3 +91,16 @@ func routeSpan(
 	route := routeWithDefaults(defaultDataStreamTypeTraces, defaultDataStreamDataset, defaultDataStreamNamespace)
 	return route(span.Attributes(), scope.Attributes(), resource.Attributes(), fIndex, otel)
 }
+
+// routeSpanEvent returns the name of the index to send the span event to according to data stream routing attributes.
+// This function may mutate record attributes.
+func routeSpanEvent(
+	spanEvent ptrace.SpanEvent,
+	scope pcommon.InstrumentationScope,
+	resource pcommon.Resource,
+	fIndex string,
+	otel bool,
+) string {
+	route := routeWithDefaults(defaultDataStreamTypeLogs, defaultDataStreamDataset, defaultDataStreamNamespace)
+	return route(spanEvent.Attributes(), scope.Attributes(), resource.Attributes(), fIndex, otel)
+}
