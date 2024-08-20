@@ -542,7 +542,7 @@ func (m *encodeModel) encodeSpanOTelMode(resource pcommon.Resource, resourceSche
 	m.encodeScopeOTelMode(&document, scope, scopeSchemaURL)
 
 	// FIXME: workaround
-	m.workaroundKibanaUnderscoreSourceUsage(&document, resource, resourceSchemaURL, span, scope, scopeSchemaURL)
+	// m.workaroundKibanaUnderscoreSourceUsage(&document, resource, resourceSchemaURL, span, scope, scopeSchemaURL)
 
 	return document
 }
