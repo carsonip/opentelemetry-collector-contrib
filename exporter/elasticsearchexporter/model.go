@@ -566,7 +566,6 @@ func (m *encodeModel) encodeSpanEvent(resource pcommon.Resource, resourceSchemaU
 	document.AddTraceID("trace_id", span.TraceID())
 	document.AddInt("dropped_attributes_count", int64(spanEvent.DroppedAttributesCount()))
 
-	// FIXME: what about span attributes?
 	m.encodeAttributesOTelMode(&document, spanEvent.Attributes())
 	m.encodeResourceOTelMode(&document, resource, resourceSchemaURL)
 	m.encodeScopeOTelMode(&document, scope, scopeSchemaURL)
