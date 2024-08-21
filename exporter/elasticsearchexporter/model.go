@@ -561,7 +561,7 @@ func (m *encodeModel) encodeSpanEvent(resource pcommon.Resource, resourceSchemaU
 	}
 	var document objmodel.Document
 	document.AddTimestamp("@timestamp", spanEvent.Timestamp())
-	document.AddString("name", spanEvent.Name())
+	document.AddString("attributes.event.name", spanEvent.Name())
 	document.AddSpanID("span_id", span.SpanID())
 	document.AddTraceID("trace_id", span.TraceID())
 	document.AddInt("dropped_attributes_count", int64(spanEvent.DroppedAttributesCount()))
