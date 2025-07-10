@@ -1864,6 +1864,42 @@ func TestExporterMetrics_Grouping(t *testing.T) {
 	})
 }
 
+func TestCollision(t *testing.T) {
+	rec := newBulkRecorder()
+	server := newESTestServer(t, func(docs []itemRequest) ([]itemResponse, error) {
+		rec.Record(docs)
+		return itemsAllOK(docs)
+	})
+
+	exporter := newTestMetricsExporter(t, server.URL, func(cfg *Config) {
+		cfg.Mapping.Mode = "otel"
+	})
+
+	md := pmetric.NewMetrics()
+	rm := md.ResourceMetrics().AppendEmpty()
+	metrics := rm.ScopeMetrics().AppendEmpty().Metrics()
+	metric := metrics.AppendEmpty()
+	metric.SetName("foo")
+	metric.SetUnit("1")
+	dps := metric.SetEmptyGauge().DataPoints()
+	dp1 := dps.AppendEmpty()
+	dp1.SetStartTimestamp(1752169352477149156)
+	dp1.SetIntValue(0)
+	dp1.Attributes().PutStr("item_index", "item_6")
+	dp1.Attributes().PutStr("batch_index", "batch_2078")
+
+	dp2 := dps.AppendEmpty()
+	dp2.SetStartTimestamp(1752169354296599250)
+	dp2.SetIntValue(0)
+	dp2.Attributes().PutStr("item_index", "item_2")
+	dp2.Attributes().PutStr("batch_index", "batch_3882")
+
+	mustSendMetrics(t, exporter, md)
+
+	rec.WaitItems(1)
+	assert.Len(t, rec.Items(), 1)
+}
+
 func mapToDistinct(m map[string]any) attribute.Distinct {
 	var kvs []attribute.KeyValue
 	for k, v := range m {
