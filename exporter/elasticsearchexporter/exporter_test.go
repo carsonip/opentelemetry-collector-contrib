@@ -41,8 +41,10 @@ import (
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/datapoints"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/elasticsearch"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metricgroup"
 )
 
 func TestExporterLogs(t *testing.T) {
@@ -1898,6 +1900,15 @@ func TestCollision(t *testing.T) {
 
 	rec.WaitItems(1)
 	assert.Len(t, rec.Items(), 1)
+
+	h1 := metricgroup.OTelDataPointHasher{}
+	h1.UpdateDataPoint(datapoints.NewNumber(metric, dp1))
+	hk1 := h1.HashKey()
+
+	h2 := metricgroup.OTelDataPointHasher{}
+	h2.UpdateDataPoint(datapoints.NewNumber(metric, dp2))
+	hk2 := h2.HashKey()
+	assert.Equal(t, hk1, hk2)
 }
 
 func mapToDistinct(m map[string]any) attribute.Distinct {
