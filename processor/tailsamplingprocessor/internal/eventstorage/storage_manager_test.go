@@ -199,7 +199,7 @@ func makeTransaction(id, traceID string) *eventstorage.Events {
 	span.SetTraceID(tid)
 	sid, _ := SpanIDFromHex(id)
 	span.SetSpanID(sid)
-	return &t
+	return &eventstorage.Events{Traces: t}
 }
 
 func TraceIDFromHex(hexStr string) (pcommon.TraceID, error) {
