@@ -38,6 +38,6 @@ func (ProtobufCodec) EncodeEvents(event *Events) ([]byte, error) {
 	payload := make([]byte, 16+len(b))
 	copy(payload[16:], b)
 	binary.BigEndian.PutUint64(payload[0:8], event.SpanCount)
-	binary.BigEndian.PutUint64(payload[9:16], uint64(event.ArrivalTime.UnixNano()))
+	binary.BigEndian.PutUint64(payload[8:16], uint64(event.ArrivalTime.UnixNano()))
 	return payload, nil
 }
