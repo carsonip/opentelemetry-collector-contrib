@@ -266,4 +266,6 @@ type Config struct {
 	Options []Option `mapstructure:"-"`
 	// Make decision as soon as a policy matches
 	SampleOnFirstMatch bool `mapstructure:"sample_on_first_match"`
+
+	OffloadToDisk bool `mapstructure:"offload_to_disk"`
 }
