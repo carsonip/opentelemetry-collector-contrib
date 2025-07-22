@@ -654,6 +654,9 @@ func (tsp *tailSamplingSpanProcessor) Start(context.Context, component.Host) err
 func (tsp *tailSamplingSpanProcessor) Shutdown(context.Context) error {
 	tsp.decisionBatcher.Stop()
 	tsp.policyTicker.Stop()
+	if tsp.storageManager != nil {
+		return tsp.storageManager.Close()
+	}
 	return nil
 }
 
