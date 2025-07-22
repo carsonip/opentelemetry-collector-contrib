@@ -373,54 +373,36 @@ func (tsp *tailSamplingSpanProcessor) samplingPolicyOnTick() {
 	batchLen := len(batch)
 
 	for _, id := range batch {
-		var decision sampling.Decision
-		var allSpans ptrace.Traces
+		d, ok := tsp.idToTrace.Load(id)
+		if !ok {
+			metrics.idNotFoundOnMapCount++
+			continue
+		}
+		td := d.(*sampling.TraceData)
+
 		if tsp.offloadToDisk {
 			traceBatch := eventstorage.Batch{}
 			if err := tsp.rw.ReadTraceEvents(id.String(), &traceBatch); err != nil {
 				tsp.logger.Warn("Failed to read trace events", zap.Error(err))
 				continue
 			}
-			td := &sampling.TraceData{
-				Mutex:           sync.Mutex{},
-				ArrivalTime:     time.Time{},
-				DecisionTime:    time.Now(),
-				SpanCount:       &atomic.Int64{},
-				ReceivedBatches: ptrace.NewTraces(),
-				FinalDecision:   sampling.Unspecified,
-			}
 			for _, trace := range traceBatch {
-				zero := time.Time{}
-				if td.ArrivalTime == zero || td.ArrivalTime.After(trace.ArrivalTime) {
-					td.ArrivalTime = trace.ArrivalTime
-				}
-				td.SpanCount.Add(int64(trace.SpanCount))
-				trace.Traces.ResourceSpans().MoveAndAppendTo(td.ReceivedBatches.ResourceSpans())
+				trace.ResourceSpans().MoveAndAppendTo(td.ReceivedBatches.ResourceSpans())
 			}
-			// TODO: remove from storage otherwise there will be duplicates
-			decision = tsp.makeDecision(id, td, &metrics)
-			tsp.telemetry.ProcessorTailSamplingGlobalCountTracesSampled.Add(tsp.ctx, 1, decisionToAttribute[decision])
-			allSpans = td.ReceivedBatches
-		} else {
-			d, ok := tsp.idToTrace.Load(id)
-			if !ok {
-				metrics.idNotFoundOnMapCount++
-				continue
-			}
-			trace := d.(*sampling.TraceData)
-			trace.DecisionTime = time.Now()
-
-			decision = tsp.makeDecision(id, trace, &metrics)
-
-			tsp.telemetry.ProcessorTailSamplingGlobalCountTracesSampled.Add(tsp.ctx, 1, decisionToAttribute[decision])
-
-			// Sampled or not, remove the batches
-			trace.Lock()
-			allSpans = trace.ReceivedBatches
-			trace.FinalDecision = decision
-			trace.ReceivedBatches = ptrace.NewTraces()
-			trace.Unlock()
 		}
+
+		td.DecisionTime = time.Now()
+
+		decision := tsp.makeDecision(id, td, &metrics)
+
+		tsp.telemetry.ProcessorTailSamplingGlobalCountTracesSampled.Add(tsp.ctx, 1, decisionToAttribute[decision])
+
+		// Sampled or not, remove the batches
+		td.Lock()
+		allSpans := td.ReceivedBatches
+		td.FinalDecision = decision
+		td.ReceivedBatches = ptrace.NewTraces()
+		td.Unlock()
 
 		switch decision {
 		case sampling.Sampled:
@@ -580,85 +562,74 @@ func (tsp *tailSamplingSpanProcessor) processTraces(resourceSpans ptrace.Resourc
 
 		lenSpans := int64(len(spans))
 
-		if tsp.offloadToDisk {
-			if len(spans) > 0 {
-				if _, loaded := tsp.idToTrace.LoadOrStore(id, &sampling.TraceData{ArrivalTime: time.Now()}); !loaded {
-					newTraceIDs++
-					tsp.decisionBatcher.AddToCurrentBatch(id)
-					tsp.numTracesOnMap.Add(1)
-				}
-				traces := ptrace.NewTraces()
-				appendToTraces(traces, resourceSpans, spans)
-				randomId := spans[0].span.SpanID()
-				td := &eventstorage.Events{
-					ArrivalTime: currTime,
-					SpanCount:   uint64(lenSpans),
-					Traces:      traces,
-				}
-				if err := tsp.rw.WriteTraceEvent(id.String(), randomId.String(), td); err != nil {
-					tsp.logger.Error("Failed to write trace event", zap.Error(err))
-				}
+		d, loaded := tsp.idToTrace.Load(id)
+		if !loaded {
+			spanCount := &atomic.Int64{}
+			spanCount.Store(lenSpans)
+
+			td := &sampling.TraceData{
+				ArrivalTime:     currTime,
+				SpanCount:       spanCount,
+				ReceivedBatches: ptrace.NewTraces(), // TODO: potential alloc
 			}
-		} else {
-			d, loaded := tsp.idToTrace.Load(id)
-			if !loaded {
-				spanCount := &atomic.Int64{}
-				spanCount.Store(lenSpans)
 
-				td := &sampling.TraceData{
-					ArrivalTime:     currTime,
-					SpanCount:       spanCount,
-					ReceivedBatches: ptrace.NewTraces(),
-				}
-
-				if d, loaded = tsp.idToTrace.LoadOrStore(id, td); !loaded {
-					newTraceIDs++
-					tsp.decisionBatcher.AddToCurrentBatch(id)
-					tsp.numTracesOnMap.Add(1)
-					postDeletion := false
-					for !postDeletion {
-						select {
-						case tsp.deleteChan <- id:
-							postDeletion = true
-						default:
-							traceKeyToDrop := <-tsp.deleteChan
-							tsp.dropTrace(traceKeyToDrop, currTime)
-						}
+			if d, loaded = tsp.idToTrace.LoadOrStore(id, td); !loaded {
+				newTraceIDs++
+				tsp.decisionBatcher.AddToCurrentBatch(id)
+				tsp.numTracesOnMap.Add(1)
+				postDeletion := false
+				for !postDeletion {
+					select {
+					case tsp.deleteChan <- id:
+						postDeletion = true
+					default:
+						traceKeyToDrop := <-tsp.deleteChan
+						tsp.dropTrace(traceKeyToDrop, currTime)
 					}
 				}
 			}
+		}
 
-			actualData := d.(*sampling.TraceData)
-			if loaded {
-				actualData.SpanCount.Add(lenSpans)
-			}
+		actualData := d.(*sampling.TraceData)
+		if loaded {
+			actualData.SpanCount.Add(lenSpans)
+		}
 
-			actualData.Lock()
-			finalDecision := actualData.FinalDecision
+		actualData.Lock()
+		finalDecision := actualData.FinalDecision
 
-			if finalDecision == sampling.Unspecified {
-				// If the final decision hasn't been made, add the new spans under the lock.
+		if finalDecision == sampling.Unspecified {
+			// If the final decision hasn't been made, add the new spans under the lock.
+			if tsp.offloadToDisk {
+				// TODO: disk write while lock held
+				traces := ptrace.NewTraces()
+				appendToTraces(traces, resourceSpans, spans)
+				randomId := spans[0].span.SpanID() // TODO: fix potential panic
+				if err := tsp.rw.WriteTraceEvent(id.String(), randomId.String(), &traces); err != nil {
+					tsp.logger.Error("Failed to write trace event", zap.Error(err))
+				}
+			} else {
 				appendToTraces(actualData.ReceivedBatches, resourceSpans, spans)
-				actualData.Unlock()
-				continue
 			}
-
 			actualData.Unlock()
+			continue
+		}
 
-			switch finalDecision {
-			case sampling.Sampled:
-				traceTd := ptrace.NewTraces()
-				appendToTraces(traceTd, resourceSpans, spans)
-				tsp.releaseSampledTrace(tsp.ctx, id, traceTd)
-			case sampling.NotSampled:
-				tsp.releaseNotSampledTrace(id)
-			default:
-				tsp.logger.Warn("Unexpected sampling decision", zap.Int("decision", int(finalDecision)))
-			}
+		actualData.Unlock()
 
-			if !actualData.DecisionTime.IsZero() {
-				tsp.telemetry.ProcessorTailSamplingSamplingLateSpanAge.Record(tsp.ctx, int64(time.Since(actualData.DecisionTime)/time.Second))
-			}
+		switch finalDecision {
+		case sampling.Sampled:
+			traceTd := ptrace.NewTraces()
+			appendToTraces(traceTd, resourceSpans, spans)
+			tsp.releaseSampledTrace(tsp.ctx, id, traceTd)
+		case sampling.NotSampled:
+			tsp.releaseNotSampledTrace(id)
+		default:
+			tsp.logger.Warn("Unexpected sampling decision", zap.Int("decision", int(finalDecision)))
+		}
+
+		if !actualData.DecisionTime.IsZero() {
+			tsp.telemetry.ProcessorTailSamplingSamplingLateSpanAge.Record(tsp.ctx, int64(time.Since(actualData.DecisionTime)/time.Second))
 		}
 	}
 	tsp.telemetry.ProcessorTailSamplingNewTraceIDReceived.Add(tsp.ctx, newTraceIDs)
