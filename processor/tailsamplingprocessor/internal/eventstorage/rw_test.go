@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/eventstorage"
 )
 
 type mockChecker struct {
@@ -27,12 +29,12 @@ type mockRW struct {
 	callback func()
 }
 
-func (m mockRW) ReadTraceEvents(traceID string, out *Batch) error {
+func (m mockRW) ReadTraceEvents(traceID string, out *eventstorage.Batch) error {
 	m.callback()
 	return nil
 }
 
-func (m mockRW) WriteTraceEvent(traceID, id string, event *APMEvent) error {
+func (m mockRW) WriteTraceEvent(traceID, id string, event eventstorage.Marshaler) error {
 	m.callback()
 	return nil
 }

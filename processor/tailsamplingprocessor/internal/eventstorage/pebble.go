@@ -10,9 +10,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/bloom"
-
-	"github.com/elastic/apm-server/internal/logs"
-	"github.com/elastic/elastic-agent-libs/logp"
+	"go.uber.org/zap"
 )
 
 func eventComparer() *pebble.Comparer {
@@ -39,12 +37,13 @@ func eventComparer() *pebble.Comparer {
 }
 
 func OpenEventPebble(storageDir string, cacheSize uint64) (*pebble.DB, error) {
+	logger, _ := zap.NewProduction()
 	// Option values are picked and validated in https://github.com/elastic/apm-server/issues/15568
 	cache := pebble.NewCache(int64(cacheSize))
 	defer cache.Unref()
 	opts := &pebble.Options{
 		FormatMajorVersion: pebble.FormatColumnarBlocks,
-		Logger:             logp.NewLogger(logs.Sampling),
+		Logger:             logger.Sugar(),
 		MemTableSize:       16 << 20,
 		Levels: []pebble.LevelOptions{
 			{
@@ -64,12 +63,13 @@ func OpenEventPebble(storageDir string, cacheSize uint64) (*pebble.DB, error) {
 }
 
 func OpenDecisionPebble(storageDir string, cacheSize uint64) (*pebble.DB, error) {
+	logger, _ := zap.NewProduction()
 	// Option values are picked and validated in https://github.com/elastic/apm-server/issues/15568
 	cache := pebble.NewCache(int64(cacheSize))
 	defer cache.Unref()
 	opts := &pebble.Options{
 		FormatMajorVersion: pebble.FormatColumnarBlocks,
-		Logger:             logp.NewLogger(logs.Sampling),
+		Logger:             logger.Sugar(),
 		MemTableSize:       2 << 20, // big memtables are slow to scan, and significantly slow the hot path
 		Levels: []pebble.LevelOptions{
 			{

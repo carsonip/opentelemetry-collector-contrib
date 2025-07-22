@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"go.opentelemetry.io/otel/metric"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -102,7 +103,7 @@ type DiskUsage struct {
 type StorageManager struct {
 	storageDir  string
 	dbCacheSize uint64
-	logger      *logp.Logger
+	logger      *zap.Logger
 
 	eventDB         *pebble.DB
 	decisionDB      *pebble.DB
@@ -146,10 +147,11 @@ type storageMetrics struct {
 
 // NewStorageManager returns a new StorageManager with pebble DB at storageDir.
 func NewStorageManager(storageDir string, opts ...StorageManagerOptions) (*StorageManager, error) {
+	logger, _ := zap.NewProduction()
 	sm := &StorageManager{
 		storageDir: storageDir,
 		runCh:      make(chan struct{}, 1),
-		logger:     logp.NewLogger(logs.Sampling),
+		logger:     logger,
 		codec:      ProtobufCodec{},
 		getDiskUsage: func() (DiskUsage, error) {
 			usage, err := vfs.Default.GetDiskUsage(storageDir)
@@ -200,7 +202,7 @@ func (sm *StorageManager) reset() error {
 	if sm.partitioner == nil {
 		var currentPID int
 		if currentPID, err = sm.loadPartitionID(); err != nil {
-			sm.logger.With(logp.Error(err)).Warn("failed to load partition ID, using 0 instead")
+			sm.logger.Warn("failed to load partition ID, using 0 instead", zap.Error(err))
 		}
 		// We need to keep an extra partition as buffer to respect the TTL,
 		// as the moving window needs to cover at least TTL at all times,
@@ -285,7 +287,7 @@ func (sm *StorageManager) updateDiskUsage() {
 	}
 	usage, err := sm.getDiskUsage()
 	if err != nil {
-		sm.logger.With(logp.Error(err)).Warn("failed to get disk usage")
+		sm.logger.Warn("failed to get disk usage", zap.Error(err))
 		sm.getDiskUsageFailed.Store(true)
 		sm.cachedDiskStat.used.Store(0)
 		sm.cachedDiskStat.total.Store(0) // setting total to 0 to disable any running disk usage threshold checks
@@ -383,7 +385,7 @@ func (sm *StorageManager) runTTLGCLoop(stopping <-chan struct{}, ttl time.Durati
 		case <-ticker.C:
 			sm.logger.Info("running TTL GC to clear expired entries and reclaim disk space")
 			if err := sm.RotatePartitions(); err != nil {
-				sm.logger.With(logp.Error(err)).Error("failed to rotate partition")
+				sm.logger.Error("failed to rotate partition", zap.Error(err))
 			}
 			sm.logger.Info("finished running TTL GC")
 		}
@@ -425,51 +427,12 @@ func (sm *StorageManager) WriteSubscriberPosition(data []byte) error {
 }
 
 // NewReadWriter returns a read writer configured with storage limit and disk usage threshold.
-func (sm *StorageManager) NewReadWriter(storageLimit uint64, diskUsageThreshold float64) RW {
+func (sm *StorageManager) NewReadWriter(_ uint64, diskUsageThreshold float64) RW {
 	var rw RW = SplitReadWriter{
 		eventRW:    sm.eventStorage.NewReadWriter(),
 		decisionRW: sm.decisionStorage.NewReadWriter(),
 	}
 
-	// If db storage limit is set, only enforce db storage limit.
-	if storageLimit > 0 {
-		// dbStorageLimit returns max size of db in bytes.
-		// If size of db exceeds dbStorageLimit, writes should be rejected.
-		dbStorageLimit := func() uint64 {
-			return storageLimit
-		}
-		sm.logger.Infof("setting database storage limit to %0.1fgb", float64(storageLimit)/gb)
-		dbStorageLimitChecker := NewStorageLimitCheckerFunc(sm.dbSize, dbStorageLimit)
-		rw = NewStorageLimitReadWriter("database storage limit", dbStorageLimitChecker, rw)
-		return rw
-	}
-
-	// DB storage limit is unlimited, enforce disk usage threshold if possible.
-	// Load whether getDiskUsage failed, as it was called during StorageManager initialization.
-	if sm.getDiskUsageFailed.Load() {
-		// Limit db size to fallback storage limit as getDiskUsage returned an error
-		dbStorageLimit := func() uint64 {
-			return dbStorageLimitFallback
-		}
-		sm.logger.Warnf("overriding database storage limit to fallback default of %0.1fgb as get disk usage failed", float64(dbStorageLimitFallback)/gb)
-		dbStorageLimitChecker := NewStorageLimitCheckerFunc(sm.dbSize, dbStorageLimit)
-		rw = NewStorageLimitReadWriter("database storage limit", dbStorageLimitChecker, rw)
-		return rw
-	}
-
-	// diskThreshold returns max used disk space in bytes, not in percentage.
-	// If size of used disk space exceeds diskThreshold, writes should be rejected.
-	diskThreshold := func() uint64 {
-		return uint64(float64(sm.cachedDiskStat.total.Load()) * diskUsageThreshold)
-	}
-	// the total disk space could change in runtime, but it is still useful to print it out in logs.
-	sm.logger.Infof("setting disk usage threshold to %.0f%% of total disk space of %0.1fgb", diskUsageThreshold*100, float64(sm.cachedDiskStat.total.Load())/gb)
-	diskThresholdChecker := NewStorageLimitCheckerFunc(sm.diskUsed, diskThreshold)
-	rw = NewStorageLimitReadWriter(
-		fmt.Sprintf("disk usage threshold %.2f", diskUsageThreshold),
-		diskThresholdChecker,
-		rw,
-	)
 	return rw
 }
 
