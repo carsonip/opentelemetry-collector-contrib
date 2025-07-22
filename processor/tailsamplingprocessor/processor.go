@@ -571,7 +571,7 @@ func (tsp *tailSamplingSpanProcessor) processTraces(resourceSpans ptrace.Resourc
 			appendToTraces(traces, resourceSpans, spans)
 			if len(spans) > 0 {
 				randomId := spans[0].span.SpanID()
-				if err := tsp.rw.WriteTraceEvent(id.String(), randomId.String(), traces); err != nil {
+				if err := tsp.rw.WriteTraceEvent(id.String(), randomId.String(), &traces); err != nil {
 					tsp.logger.Error("Failed to write trace event", zap.Error(err))
 				}
 			}

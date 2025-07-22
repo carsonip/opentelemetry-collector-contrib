@@ -5,13 +5,17 @@
 package eventstorage_test
 
 import (
-	"errors"
+	"encoding/hex"
 	"testing"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/ptrace"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/eventstorage"
 )
 
 func newStorageManager(tb testing.TB, opts ...eventstorage.StorageManagerOptions) *eventstorage.StorageManager {
@@ -74,7 +78,7 @@ func TestStorageManager_eventTTL(t *testing.T) {
 	err := rw.WriteTraceEvent(traceID, txnID1, txn1)
 	assert.NoError(t, err)
 
-	var out Batch
+	var out eventstorage.Batch
 	err = rw.ReadTraceEvents(traceID, &out)
 	assert.NoError(t, err)
 	assert.Len(t, out, 1)
@@ -91,7 +95,7 @@ func TestStorageManager_eventTTL(t *testing.T) {
 	out = nil
 	err = rw.ReadTraceEvents(traceID, &out)
 	assert.NoError(t, err)
-	assert.Equal(t, Batch{txn2, txn1}, out)
+	assert.Equal(t, eventstorage.Batch{txn2, txn1}, out)
 
 	// after 2 TTL
 	err = sm.RotatePartitions()
@@ -100,7 +104,7 @@ func TestStorageManager_eventTTL(t *testing.T) {
 	out = nil
 	err = rw.ReadTraceEvents(traceID, &out)
 	assert.NoError(t, err)
-	assert.Equal(t, Batch{txn2}, out)
+	assert.Equal(t, eventstorage.Batch{txn2}, out)
 
 	// after 3 TTL
 	err = sm.RotatePartitions()
@@ -183,147 +187,37 @@ func TestStorageManager_Run(t *testing.T) {
 	<-done
 }
 
-func TestStorageManager_StorageLimit(t *testing.T) {
-	done := make(chan struct{})
-	stopping := make(chan struct{})
-	sm := newStorageManager(t)
-	go func() {
-		assert.NoError(t, sm.Run(stopping, time.Second))
-		close(done)
-	}()
-	require.NoError(t, sm.Flush())
-	lsm, _ := sm.Size()
-	assert.Greater(t, lsm, int64(1))
+type nopCodec struct{}
 
-	traceID := uuid.Must(uuid.NewV4()).String()
-	txnID := uuid.Must(uuid.NewV4()).String()
-	txn := makeTransaction(txnID, traceID)
+func (nopCodec) DecodeEvents(data []byte, events *eventstorage.Events) error { return nil }
+func (nopCodec) EncodeEvents(events *eventstorage.Events) ([]byte, error)    { return nil, nil }
 
-	small := sm.NewReadWriter(1, 0)
-	assert.ErrorIs(t, small.WriteTraceEvent(traceID, txnID, txn), eventstorage.ErrLimitReached)
-
-	big := sm.NewReadWriter(10<<10, 0)
-	assert.NoError(t, big.WriteTraceEvent(traceID, txnID, txn))
-
-	close(stopping)
-	<-done
+func makeTransaction(id, traceID string) *eventstorage.Events {
+	t := ptrace.NewTraces()
+	span := t.ResourceSpans().AppendEmpty().ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+	tid, _ := TraceIDFromHex(traceID)
+	span.SetTraceID(tid)
+	sid, _ := SpanIDFromHex(id)
+	span.SetSpanID(sid)
+	return &t
 }
 
-func TestStorageManager_StorageLimitDiskUsageThreshold(t *testing.T) {
-	for _, tc := range []struct {
-		name               string
-		storageLimit       uint64
-		dbSize             uint64
-		diskUsage          eventstorage.DiskUsage
-		getDiskUsageErr    error
-		diskUsageThreshold float64
-		wantErr            error
-	}{
-		{
-			name: "under threshold",
-			diskUsage: eventstorage.DiskUsage{
-				UsedBytes:  1,
-				TotalBytes: 10,
-			},
-			diskUsageThreshold: 0.9,
-			wantErr:            nil,
-		},
-		{
-			name: "above threshold",
-			diskUsage: eventstorage.DiskUsage{
-				UsedBytes:  9,
-				TotalBytes: 10,
-			},
-			diskUsageThreshold: 0.8,
-			wantErr:            eventstorage.ErrLimitReached,
-		},
-		{
-			name:   "threshold ignored, within storage limit",
-			dbSize: 8,
-			diskUsage: eventstorage.DiskUsage{
-				UsedBytes:  0,
-				TotalBytes: 10,
-			},
-			storageLimit:       9,
-			diskUsageThreshold: 0.1,
-			wantErr:            nil,
-		},
-		{
-			name:   "threshold ignored, exceed storage limit",
-			dbSize: 9,
-			diskUsage: eventstorage.DiskUsage{
-				UsedBytes:  0,
-				TotalBytes: 10,
-			},
-			storageLimit:       8,
-			diskUsageThreshold: 0.1,
-			wantErr:            eventstorage.ErrLimitReached,
-		},
-		{
-			name: "unlimited 1",
-			diskUsage: eventstorage.DiskUsage{
-				UsedBytes:  9,
-				TotalBytes: 10,
-			},
-			diskUsageThreshold: 1,
-			wantErr:            nil,
-		},
-		{
-			name: "unlimited 0",
-			diskUsage: eventstorage.DiskUsage{
-				UsedBytes:  9,
-				TotalBytes: 10,
-			},
-			diskUsageThreshold: 0,
-			wantErr:            nil,
-		},
-		{
-			name:               "err with 0 storage limit non-0 disk usage threshold, within storage limit",
-			dbSize:             0,
-			getDiskUsageErr:    errors.New("boom"),
-			diskUsageThreshold: 0.8,
-			storageLimit:       0,
-			wantErr:            nil, // did not exceed fallback
-		},
-		{
-			name:               "err with 0 storage limit non-0 disk usage threshold, exceed storage limit",
-			dbSize:             5 << 30, // 5GB should exceed 3GB fallback
-			getDiskUsageErr:    errors.New("boom"),
-			diskUsageThreshold: 0.8,
-			storageLimit:       0,
-			wantErr:            eventstorage.ErrLimitReached,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mockGetDiskUsage := func() (eventstorage.DiskUsage, error) {
-				return tc.diskUsage, tc.getDiskUsageErr
-			}
-			mockGetDBSize := func() uint64 {
-				return tc.dbSize
-			}
-			done := make(chan struct{})
-			stopping := make(chan struct{})
-			sm := newStorageManager(t, eventstorage.WithGetDiskUsage(mockGetDiskUsage), eventstorage.WithGetDBSize(mockGetDBSize))
-			go func() {
-				assert.NoError(t, sm.Run(stopping, time.Second))
-				close(done)
-			}()
-			require.NoError(t, sm.Flush())
-
-			traceID := uuid.Must(uuid.NewV4()).String()
-			txnID := uuid.Must(uuid.NewV4()).String()
-			txn := makeTransaction(txnID, traceID)
-
-			rw := sm.NewReadWriter(tc.storageLimit, tc.diskUsageThreshold)
-			err := rw.WriteTraceEvent(traceID, txnID, txn)
-			if tc.wantErr != nil {
-				assert.ErrorIs(t, err, eventstorage.ErrLimitReached)
-			} else {
-				assert.NoError(t, err)
-			}
-
-			close(stopping)
-			<-done
-		})
+func TraceIDFromHex(hexStr string) (pcommon.TraceID, error) {
+	bytes, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return pcommon.TraceID{}, err
 	}
+	var id pcommon.TraceID
+	copy(id[:], bytes)
+	return id, nil
+}
+
+func SpanIDFromHex(hexStr string) (pcommon.SpanID, error) {
+	bytes, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return pcommon.SpanID{}, err
+	}
+	var id pcommon.SpanID
+	copy(id[:], bytes)
+	return id, nil
 }

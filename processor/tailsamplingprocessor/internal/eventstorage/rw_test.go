@@ -34,7 +34,7 @@ func (m mockRW) ReadTraceEvents(traceID string, out *eventstorage.Batch) error {
 	return nil
 }
 
-func (m mockRW) WriteTraceEvent(traceID, id string, event eventstorage.Events) error {
+func (m mockRW) WriteTraceEvent(traceID, id string, events *eventstorage.Events) error {
 	m.callback()
 	return nil
 }

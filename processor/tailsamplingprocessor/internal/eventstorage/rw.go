@@ -23,7 +23,7 @@ type Events = ptrace.Traces
 // RW is a read writer interface that has methods to read and write trace event and sampling decisions.
 type RW interface {
 	ReadTraceEvents(traceID string, out *Batch) error
-	WriteTraceEvent(traceID, id string, events Events) error
+	WriteTraceEvent(traceID, id string, events *Events) error
 	WriteTraceSampled(traceID string, sampled bool) error
 	IsTraceSampled(traceID string) (bool, error)
 	DeleteTraceEvent(traceID, id string) error
@@ -40,7 +40,7 @@ func (s SplitReadWriter) ReadTraceEvents(traceID string, out *Batch) error {
 	return s.eventRW.ReadTraceEvents(traceID, out)
 }
 
-func (s SplitReadWriter) WriteTraceEvent(traceID, id string, events Events) error {
+func (s SplitReadWriter) WriteTraceEvent(traceID, id string, events *Events) error {
 	return s.eventRW.WriteTraceEvent(traceID, id, events)
 }
 
@@ -117,7 +117,7 @@ func (s StorageLimitReadWriter) ReadTraceEvents(traceID string, out *Batch) erro
 }
 
 // WriteTraceEvent passes through to s.nextRW.WriteTraceEvent only if storage limit is not reached.
-func (s StorageLimitReadWriter) WriteTraceEvent(traceID, id string, events Events) error {
+func (s StorageLimitReadWriter) WriteTraceEvent(traceID, id string, events *Events) error {
 	if err := s.checkStorageLimit(); err != nil {
 		return err
 	}

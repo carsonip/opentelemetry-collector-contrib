@@ -71,7 +71,7 @@ func (rw PrefixReadWriter) ReadTraceEvents(traceID string, out *Batch) error {
 		if err != nil {
 			return err
 		}
-		if err := rw.codec.DecodeEvent(data, event); err != nil {
+		if err := rw.codec.DecodeEvents(data, event); err != nil {
 			return fmt.Errorf("codec failed to decode event: %w", err)
 		}
 		*out = append(*out, event)
@@ -80,8 +80,8 @@ func (rw PrefixReadWriter) ReadTraceEvents(traceID string, out *Batch) error {
 }
 
 // WriteTraceEvent writes encoded event as value to rw.db with key consisting of rw.prefix, traceID and id.
-func (rw PrefixReadWriter) WriteTraceEvent(traceID, id string, events Events) error {
-	data, err := rw.codec.EncodeEvent(events)
+func (rw PrefixReadWriter) WriteTraceEvent(traceID, id string, events *Events) error {
+	data, err := rw.codec.EncodeEvents(events)
 	if err != nil {
 		return err
 	}

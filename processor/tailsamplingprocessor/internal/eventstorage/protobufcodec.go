@@ -11,8 +11,8 @@ import (
 // ProtobufCodec is an implementation of Codec, using protobuf encoding.
 type ProtobufCodec struct{}
 
-// DecodeEvent decodes data as protobuf into event.
-func (ProtobufCodec) DecodeEvent(data []byte, event *Events) error {
+// DecodeEvents decodes data as protobuf into event.
+func (ProtobufCodec) DecodeEvents(data []byte, event *Events) error {
 	m := ptrace.ProtoUnmarshaler{}
 	t, err := m.UnmarshalTraces(data)
 	if err != nil {
@@ -22,8 +22,8 @@ func (ProtobufCodec) DecodeEvent(data []byte, event *Events) error {
 	return nil
 }
 
-// EncodeEvent encodes event as protobuf.
-func (ProtobufCodec) EncodeEvent(event *Events) ([]byte, error) {
+// EncodeEvents encodes event as protobuf.
+func (ProtobufCodec) EncodeEvents(event *Events) ([]byte, error) {
 	m := ptrace.ProtoMarshaler{}
 	return m.MarshalTraces(*event)
 }

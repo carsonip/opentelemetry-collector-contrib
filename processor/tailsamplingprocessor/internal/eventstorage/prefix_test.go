@@ -12,6 +12,8 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/eventstorage"
 )
 
 func newEventPebble(t *testing.T) *pebble.DB {
@@ -46,8 +48,8 @@ func TestPrefixReadWriter_WriteTraceEvent(t *testing.T) {
 		item, closer, err := db.Get(append([]byte{1}, []byte("foo:bar")...))
 		assert.NoError(t, err)
 		defer closer.Close()
-		var actual APMEvent
-		err = codec.DecodeEvent(item, &actual)
+		var actual eventstorage.Events
+		err = codec.DecodeEvents(item, &actual)
 		assert.NoError(t, err)
 		assert.Equal(t, *txn, actual)
 	}
@@ -79,10 +81,10 @@ func TestPrefixReadWriter_ReadTraceEvents(t *testing.T) {
 	err = rw.WriteTraceEvent("foo12", "bar", txn)
 	require.NoError(t, err)
 
-	var out Batch
+	var out eventstorage.Batch
 	err = rw.ReadTraceEvents(traceID, &out)
 	assert.NoError(t, err)
-	assert.Equal(t, Batch{
+	assert.Equal(t, eventstorage.Batch{
 		makeTransaction("bar", traceID),
 		makeTransaction("baz", traceID),
 	}, out)
