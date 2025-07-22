@@ -578,7 +578,7 @@ func (tsp *tailSamplingSpanProcessor) processTraces(resourceSpans ptrace.Resourc
 
 		if tsp.offloadToDisk {
 			if len(spans) > 0 {
-				if _, loaded := tsp.idToTrace.LoadOrStore(id, struct{}{}); !loaded {
+				if _, loaded := tsp.idToTrace.LoadOrStore(id, &sampling.TraceData{ArrivalTime: time.Now()}); !loaded {
 					newTraceIDs++
 					tsp.decisionBatcher.AddToCurrentBatch(id)
 					tsp.numTracesOnMap.Add(1)
