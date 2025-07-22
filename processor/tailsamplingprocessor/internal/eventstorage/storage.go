@@ -28,16 +28,8 @@ type Storage struct {
 
 // Codec provides methods for encoding and decoding events.
 type Codec interface {
-	DecodeEvents([]byte, Unmarshaler) error
-	EncodeEvents(Marshaler) ([]byte, error)
-}
-
-type Marshaler interface {
-	Marshal() ([]byte, error)
-}
-
-type Unmarshaler interface {
-	Unmarshal([]byte) error
+	DecodeEvents([]byte, *Events) error
+	EncodeEvents(*Events) ([]byte, error)
 }
 
 // New returns a new Storage using db and codec.

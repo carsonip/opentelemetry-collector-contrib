@@ -66,7 +66,7 @@ func (rw PrefixReadWriter) ReadTraceEvents(traceID string, out *Batch) error {
 		return nil
 	}
 	for ; iter.Valid(); iter.Next() {
-		event := &APMEvent{}
+		event := &Events{}
 		data, err := iter.ValueAndErr()
 		if err != nil {
 			return err
@@ -80,7 +80,7 @@ func (rw PrefixReadWriter) ReadTraceEvents(traceID string, out *Batch) error {
 }
 
 // WriteTraceEvent writes encoded event as value to rw.db with key consisting of rw.prefix, traceID and id.
-func (rw PrefixReadWriter) WriteTraceEvent(traceID, id string, events Marshaler) error {
+func (rw PrefixReadWriter) WriteTraceEvent(traceID, id string, events Events) error {
 	data, err := rw.codec.EncodeEvent(events)
 	if err != nil {
 		return err

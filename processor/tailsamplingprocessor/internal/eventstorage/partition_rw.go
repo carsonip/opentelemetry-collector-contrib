@@ -46,7 +46,7 @@ func (rw *PartitionReadWriter) IsTraceSampled(traceID string) (bool, error) {
 }
 
 // WriteTraceEvent writes a trace event to storage.
-func (rw *PartitionReadWriter) WriteTraceEvent(traceID, id string, events Marshaler) (err error) {
+func (rw *PartitionReadWriter) WriteTraceEvent(traceID, id string, events Events) (err error) {
 	rw.s.partitioner.CurrentIDFunc(func(pid int) {
 		err = NewPrefixReadWriter(rw.s.db, byte(pid), rw.s.codec).WriteTraceEvent(traceID, id, events)
 	})
