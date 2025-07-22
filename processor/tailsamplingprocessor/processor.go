@@ -134,18 +134,6 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 		offloadToDisk:      cfg.OffloadToDisk,
 	}
 	tsp.policyTicker = &timeutils.PolicyTicker{OnTickFunc: tsp.samplingPolicyOnTick}
-	if cfg.OffloadToDisk {
-		tmpDir, err := os.MkdirTemp("", "pebble")
-		if err != nil {
-			return nil, err
-		}
-		sm, err := eventstorage.NewStorageManager(tmpDir)
-		if err != nil {
-			return nil, err
-		}
-		tsp.storageManager = sm
-		tsp.rw = sm.NewReadWriter(0, 0)
-	}
 
 	for _, opt := range cfg.Options {
 		opt(tsp)
@@ -642,6 +630,18 @@ func (*tailSamplingSpanProcessor) Capabilities() consumer.Capabilities {
 // Start is invoked during service startup.
 func (tsp *tailSamplingSpanProcessor) Start(context.Context, component.Host) error {
 	tsp.policyTicker.Start(tsp.tickerFrequency)
+	if tsp.offloadToDisk {
+		tmpDir, err := os.MkdirTemp("", "pebble")
+		if err != nil {
+			return err
+		}
+		sm, err := eventstorage.NewStorageManager(tmpDir)
+		if err != nil {
+			return err
+		}
+		tsp.storageManager = sm
+		tsp.rw = sm.NewReadWriter(0, 0)
+	}
 	return nil
 }
 
