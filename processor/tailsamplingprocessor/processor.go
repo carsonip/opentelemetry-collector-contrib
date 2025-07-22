@@ -396,6 +396,7 @@ func (tsp *tailSamplingSpanProcessor) samplingPolicyOnTick() {
 			// TODO: remove from storage otherwise there will be duplicates
 			decision = tsp.makeDecision(id, td, &metrics)
 			tsp.telemetry.ProcessorTailSamplingGlobalCountTracesSampled.Add(tsp.ctx, 1, decisionToAttribute[decision])
+			allSpans = td.ReceivedBatches
 		} else {
 			d, ok := tsp.idToTrace.Load(id)
 			if !ok {
