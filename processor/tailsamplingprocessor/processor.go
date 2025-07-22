@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"runtime"
 	"slices"
 	"sync"
@@ -134,7 +135,7 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 	}
 	tsp.policyTicker = &timeutils.PolicyTicker{OnTickFunc: tsp.samplingPolicyOnTick}
 	if cfg.OffloadToDisk {
-		sm, err := eventstorage.NewStorageManager("data")
+		sm, err := eventstorage.NewStorageManager(os.TempDir())
 		if err != nil {
 			return nil, err
 		}
@@ -576,6 +577,11 @@ func (tsp *tailSamplingSpanProcessor) processTraces(resourceSpans ptrace.Resourc
 
 		if tsp.offloadToDisk {
 			if len(spans) > 0 {
+				if _, loaded := tsp.idToTrace.LoadOrStore(id, struct{}{}); !loaded {
+					newTraceIDs++
+					tsp.decisionBatcher.AddToCurrentBatch(id)
+					tsp.numTracesOnMap.Add(1)
+				}
 				traces := ptrace.NewTraces()
 				appendToTraces(traces, resourceSpans, spans)
 				randomId := spans[0].span.SpanID()
