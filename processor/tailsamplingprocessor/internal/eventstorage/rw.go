@@ -7,6 +7,7 @@ package eventstorage
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"go.opentelemetry.io/collector/pdata/ptrace"
 )
@@ -18,7 +19,11 @@ var (
 )
 
 type Batch []*Events
-type Events = ptrace.Traces
+type Events struct {
+	Traces      ptrace.Traces
+	SpanCount   uint64
+	ArrivalTime time.Time
+}
 
 // RW is a read writer interface that has methods to read and write trace event and sampling decisions.
 type RW interface {

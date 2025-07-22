@@ -376,18 +376,25 @@ func (tsp *tailSamplingSpanProcessor) samplingPolicyOnTick() {
 				tsp.logger.Warn("Failed to read trace events", zap.Error(err))
 				continue
 			}
-			for _, trace := range traceBatch {
-				trace.ResourceSpans().MoveAndAppendTo(allSpans.ResourceSpans())
-			}
-			// TODO: remove from storage otherwise there will be duplicates
-			decision = tsp.makeDecision(id, &sampling.TraceData{
+			td := &sampling.TraceData{
 				Mutex:           sync.Mutex{},
 				ArrivalTime:     time.Time{},
-				DecisionTime:    time.Time{},
-				SpanCount:       nil,
-				ReceivedBatches: allSpans,
+				DecisionTime:    time.Now(),
+				SpanCount:       &atomic.Int64{},
+				ReceivedBatches: ptrace.NewTraces(),
 				FinalDecision:   sampling.Unspecified,
-			}, &metrics)
+			}
+			for _, trace := range traceBatch {
+				zero := time.Time{}
+				if td.ArrivalTime == zero || td.ArrivalTime.After(trace.ArrivalTime) {
+					td.ArrivalTime = trace.ArrivalTime
+				}
+				td.SpanCount.Add(int64(trace.SpanCount))
+				trace.Traces.ResourceSpans().MoveAndAppendTo(td.ReceivedBatches.ResourceSpans())
+			}
+			// TODO: remove from storage otherwise there will be duplicates
+			decision = tsp.makeDecision(id, td, &metrics)
+			tsp.telemetry.ProcessorTailSamplingGlobalCountTracesSampled.Add(tsp.ctx, 1, decisionToAttribute[decision])
 		} else {
 			d, ok := tsp.idToTrace.Load(id)
 			if !ok {
@@ -568,11 +575,16 @@ func (tsp *tailSamplingSpanProcessor) processTraces(resourceSpans ptrace.Resourc
 		lenSpans := int64(len(spans))
 
 		if tsp.offloadToDisk {
-			traces := ptrace.NewTraces()
-			appendToTraces(traces, resourceSpans, spans)
 			if len(spans) > 0 {
+				traces := ptrace.NewTraces()
+				appendToTraces(traces, resourceSpans, spans)
 				randomId := spans[0].span.SpanID()
-				if err := tsp.rw.WriteTraceEvent(id.String(), randomId.String(), &traces); err != nil {
+				td := &eventstorage.Events{
+					ArrivalTime: currTime,
+					SpanCount:   uint64(lenSpans),
+					Traces:      traces,
+				}
+				if err := tsp.rw.WriteTraceEvent(id.String(), randomId.String(), td); err != nil {
 					tsp.logger.Error("Failed to write trace event", zap.Error(err))
 				}
 			}
