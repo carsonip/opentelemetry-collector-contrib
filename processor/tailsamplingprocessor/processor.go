@@ -135,7 +135,11 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 	}
 	tsp.policyTicker = &timeutils.PolicyTicker{OnTickFunc: tsp.samplingPolicyOnTick}
 	if cfg.OffloadToDisk {
-		sm, err := eventstorage.NewStorageManager(os.TempDir())
+		tmpDir, err := os.MkdirTemp("", "pebble")
+		if err != nil {
+			return nil, err
+		}
+		sm, err := eventstorage.NewStorageManager(tmpDir)
 		if err != nil {
 			return nil, err
 		}
