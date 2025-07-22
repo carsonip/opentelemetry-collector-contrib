@@ -118,11 +118,6 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 		}
 	}
 
-	sm, err := eventstorage.NewStorageManager("data")
-	if err != nil {
-		return nil, err
-	}
-
 	tsp := &tailSamplingSpanProcessor{
 		ctx:                ctx,
 		set:                set,
@@ -136,10 +131,16 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 		deleteChan:         make(chan pcommon.TraceID, cfg.NumTraces),
 		sampleOnFirstMatch: cfg.SampleOnFirstMatch,
 		offloadToDisk:      cfg.OffloadToDisk,
-		storageManager:     sm,
-		rw:                 sm.NewReadWriter(0, 0),
 	}
 	tsp.policyTicker = &timeutils.PolicyTicker{OnTickFunc: tsp.samplingPolicyOnTick}
+	if cfg.OffloadToDisk {
+		sm, err := eventstorage.NewStorageManager("data")
+		if err != nil {
+			return nil, err
+		}
+		tsp.storageManager = sm
+		tsp.rw = sm.NewReadWriter(0, 0)
+	}
 
 	for _, opt := range cfg.Options {
 		opt(tsp)

@@ -646,7 +646,8 @@ func TestDecisionPolicyMetrics(t *testing.T) {
 		ExpectedNewTracesPerSec: 64,
 		PolicyCfgs:              policy,
 	}
-	sp, _ := newTracesProcessor(context.Background(), processortest.NewNopSettings(metadata.Type), consumertest.NewNop(), cfg)
+	sp, err := newTracesProcessor(context.Background(), processortest.NewNopSettings(metadata.Type), consumertest.NewNop(), cfg)
+	require.NoError(t, err)
 	tsp := sp.(*tailSamplingSpanProcessor)
 	require.NoError(t, tsp.Start(context.Background(), componenttest.NewNopHost()))
 	defer func() {
