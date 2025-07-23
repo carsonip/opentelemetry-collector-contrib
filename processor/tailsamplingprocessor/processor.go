@@ -368,14 +368,16 @@ func (tsp *tailSamplingSpanProcessor) samplingPolicyOnTick() {
 		}
 		td := d.(*sampling.TraceData)
 
+		var allSpans ptrace.Traces
 		if tsp.offloadToDisk {
+			allSpans = ptrace.NewTraces()
 			traceBatch := eventstorage.Batch{}
 			if err := tsp.rw.ReadTraceEvents(id.String(), &traceBatch); err != nil {
 				tsp.logger.Warn("Failed to read trace events", zap.Error(err))
 				continue
 			}
 			for _, trace := range traceBatch {
-				trace.ResourceSpans().MoveAndAppendTo(td.ReceivedBatches.ResourceSpans())
+				trace.ResourceSpans().MoveAndAppendTo(allSpans.ResourceSpans())
 			}
 		}
 
@@ -387,9 +389,11 @@ func (tsp *tailSamplingSpanProcessor) samplingPolicyOnTick() {
 
 		// Sampled or not, remove the batches
 		td.Lock()
-		allSpans := td.ReceivedBatches
+		if !tsp.offloadToDisk {
+			allSpans = td.ReceivedBatches
+			td.ReceivedBatches = ptrace.NewTraces()
+		}
 		td.FinalDecision = decision
-		td.ReceivedBatches = ptrace.NewTraces()
 		td.Unlock()
 
 		switch decision {
@@ -556,9 +560,12 @@ func (tsp *tailSamplingSpanProcessor) processTraces(resourceSpans ptrace.Resourc
 			spanCount.Store(lenSpans)
 
 			td := &sampling.TraceData{
-				ArrivalTime:     currTime,
-				SpanCount:       spanCount,
-				ReceivedBatches: ptrace.NewTraces(), // TODO: potential alloc
+				ArrivalTime: currTime,
+				SpanCount:   spanCount,
+			}
+
+			if !tsp.offloadToDisk {
+				td.ReceivedBatches = ptrace.NewTraces()
 			}
 
 			if d, loaded = tsp.idToTrace.LoadOrStore(id, td); !loaded {
