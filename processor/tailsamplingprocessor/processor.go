@@ -565,14 +565,18 @@ func (tsp *tailSamplingSpanProcessor) processTraces(resourceSpans ptrace.Resourc
 				newTraceIDs++
 				tsp.decisionBatcher.AddToCurrentBatch(id)
 				tsp.numTracesOnMap.Add(1)
-				postDeletion := false
-				for !postDeletion {
-					select {
-					case tsp.deleteChan <- id:
-						postDeletion = true
-					default:
-						traceKeyToDrop := <-tsp.deleteChan
-						tsp.dropTrace(traceKeyToDrop, currTime)
+				if tsp.offloadToDisk {
+					// Ignore num_traces limit
+				} else {
+					postDeletion := false
+					for !postDeletion {
+						select {
+						case tsp.deleteChan <- id:
+							postDeletion = true
+						default:
+							traceKeyToDrop := <-tsp.deleteChan
+							tsp.dropTrace(traceKeyToDrop, currTime)
+						}
 					}
 				}
 			}
