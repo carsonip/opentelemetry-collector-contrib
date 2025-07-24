@@ -669,11 +669,11 @@ func (tsp *tailSamplingSpanProcessor) Start(context.Context, component.Host) err
 func (tsp *tailSamplingSpanProcessor) Shutdown(context.Context) error {
 	tsp.decisionBatcher.Stop()
 	tsp.policyTicker.Stop()
-	close(tsp.smStopping)
-	if err := tsp.smErrGroup.Wait(); err != nil {
-		tsp.logger.Warn("Error running storage manager", zap.Error(err))
-	}
 	if tsp.storageManager != nil {
+		close(tsp.smStopping)
+		if err := tsp.smErrGroup.Wait(); err != nil {
+			tsp.logger.Warn("Error running storage manager", zap.Error(err))
+		}
 		return tsp.storageManager.Close()
 	}
 	return nil
