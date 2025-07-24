@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/timeutils"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/cache"
@@ -70,6 +71,9 @@ type tailSamplingSpanProcessor struct {
 	sampleOnFirstMatch bool
 	offloadToDisk      bool
 	storageManager     *eventstorage.StorageManager
+	smStopping         chan struct{}
+	smErrGroup         errgroup.Group
+	decisionWait       time.Duration
 	rw                 eventstorage.RW
 }
 
@@ -132,6 +136,7 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 		deleteChan:         make(chan pcommon.TraceID, cfg.NumTraces),
 		sampleOnFirstMatch: cfg.SampleOnFirstMatch,
 		offloadToDisk:      cfg.OffloadToDisk,
+		decisionWait:       cfg.DecisionWait,
 	}
 	tsp.policyTicker = &timeutils.PolicyTicker{OnTickFunc: tsp.samplingPolicyOnTick}
 
@@ -652,6 +657,10 @@ func (tsp *tailSamplingSpanProcessor) Start(context.Context, component.Host) err
 		}
 		tsp.storageManager = sm
 		tsp.rw = sm.NewReadWriter(0, 0)
+		tsp.smStopping = make(chan struct{})
+		tsp.smErrGroup.Go(func() error {
+			return sm.Run(tsp.smStopping, tsp.decisionWait)
+		})
 	}
 	return nil
 }
@@ -660,6 +669,10 @@ func (tsp *tailSamplingSpanProcessor) Start(context.Context, component.Host) err
 func (tsp *tailSamplingSpanProcessor) Shutdown(context.Context) error {
 	tsp.decisionBatcher.Stop()
 	tsp.policyTicker.Stop()
+	close(tsp.smStopping)
+	if err := tsp.smErrGroup.Wait(); err != nil {
+		tsp.logger.Warn("Error running storage manager", zap.Error(err))
+	}
 	if tsp.storageManager != nil {
 		return tsp.storageManager.Close()
 	}
