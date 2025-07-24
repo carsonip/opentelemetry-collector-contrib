@@ -301,6 +301,7 @@ func (sm *StorageManager) updateDiskUsage() {
 	}
 	sm.cachedDiskStat.used.Store(usage.UsedBytes)
 	sm.cachedDiskStat.total.Store(usage.TotalBytes)
+	fmt.Printf("db size %d KB\n", lsmSize/1024) // FIXME: hack to surface db size
 }
 
 // diskUsed returns the actual used disk space in bytes.
