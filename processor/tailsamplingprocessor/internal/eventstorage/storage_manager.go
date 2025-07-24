@@ -58,6 +58,12 @@ const (
 
 type StorageManagerOptions func(*StorageManager)
 
+func WithLogger(logger *zap.Logger) StorageManagerOptions {
+	return func(sm *StorageManager) {
+		sm.logger = logger
+	}
+}
+
 func WithCodec(codec Codec) StorageManagerOptions {
 	return func(sm *StorageManager) {
 		sm.codec = codec
@@ -186,13 +192,13 @@ func NewStorageManager(storageDir string, opts ...StorageManagerOptions) (*Stora
 // reset initializes db and storage.
 func (sm *StorageManager) reset() error {
 	// Configured db cache size is split between event DB and decision DB
-	eventDB, err := OpenEventPebble(sm.storageDir, sm.dbCacheSize/2)
+	eventDB, err := OpenEventPebble(sm.storageDir, sm.dbCacheSize/2, sm.logger)
 	if err != nil {
 		return fmt.Errorf("open event db error: %w", err)
 	}
 	sm.eventDB = eventDB
 
-	decisionDB, err := OpenDecisionPebble(sm.storageDir, sm.dbCacheSize/2)
+	decisionDB, err := OpenDecisionPebble(sm.storageDir, sm.dbCacheSize/2, sm.logger)
 	if err != nil {
 		return fmt.Errorf("open decision db error: %w", err)
 	}

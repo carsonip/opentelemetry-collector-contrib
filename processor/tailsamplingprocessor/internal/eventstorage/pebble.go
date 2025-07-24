@@ -36,8 +36,7 @@ func eventComparer() *pebble.Comparer {
 	return &comparer
 }
 
-func OpenEventPebble(storageDir string, cacheSize uint64) (*pebble.DB, error) {
-	logger, _ := zap.NewProduction()
+func OpenEventPebble(storageDir string, cacheSize uint64, logger *zap.Logger) (*pebble.DB, error) {
 	// Option values are picked and validated in https://github.com/elastic/apm-server/issues/15568
 	cache := pebble.NewCache(int64(cacheSize))
 	defer cache.Unref()
@@ -62,8 +61,7 @@ func OpenEventPebble(storageDir string, cacheSize uint64) (*pebble.DB, error) {
 	return pebble.Open(filepath.Join(storageDir, "event"), opts)
 }
 
-func OpenDecisionPebble(storageDir string, cacheSize uint64) (*pebble.DB, error) {
-	logger, _ := zap.NewProduction()
+func OpenDecisionPebble(storageDir string, cacheSize uint64, logger *zap.Logger) (*pebble.DB, error) {
 	// Option values are picked and validated in https://github.com/elastic/apm-server/issues/15568
 	cache := pebble.NewCache(int64(cacheSize))
 	defer cache.Unref()

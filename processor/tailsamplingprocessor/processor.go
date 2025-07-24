@@ -651,7 +651,7 @@ func (tsp *tailSamplingSpanProcessor) Start(context.Context, component.Host) err
 		if err != nil {
 			return err
 		}
-		sm, err := eventstorage.NewStorageManager(tmpDir)
+		sm, err := eventstorage.NewStorageManager(tmpDir, eventstorage.WithLogger(tsp.logger))
 		if err != nil {
 			return err
 		}
