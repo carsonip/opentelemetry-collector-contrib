@@ -659,7 +659,7 @@ func (tsp *tailSamplingSpanProcessor) Start(context.Context, component.Host) err
 		tsp.rw = sm.NewReadWriter(0, 0)
 		tsp.smStopping = make(chan struct{})
 		tsp.smErrGroup.Go(func() error {
-			return sm.Run(tsp.smStopping, tsp.decisionWait)
+			return sm.Run(tsp.smStopping, tsp.decisionWait+time.Second) // FIXME: this is hacky but add a bit of buffer before clearing out the entries
 		})
 	}
 	return nil
