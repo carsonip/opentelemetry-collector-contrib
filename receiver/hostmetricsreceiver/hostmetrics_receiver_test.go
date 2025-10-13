@@ -6,6 +6,7 @@ package hostmetricsreceiver
 import (
 	"context"
 	"errors"
+	"maps"
 	"runtime"
 	"testing"
 	"time"
@@ -96,13 +97,13 @@ func TestGatherMetrics_EndToEnd(t *testing.T) {
 		cfg.Scrapers[f.Type()] = f.CreateDefaultConfig()
 	}
 
-	recv, err := NewFactory().CreateMetrics(context.Background(), creationSet, cfg, sink)
+	recv, err := NewFactory().CreateMetrics(t.Context(), creationSet, cfg, sink)
 	require.NoError(t, err)
 
-	ctx, cancelFn := context.WithCancel(context.Background())
+	ctx, cancelFn := context.WithCancel(t.Context())
 	err = recv.Start(ctx, componenttest.NewNopHost())
 	require.NoError(t, err)
-	defer func() { assert.NoError(t, recv.Shutdown(context.Background())) }()
+	defer func() { assert.NoError(t, recv.Shutdown(t.Context())) }()
 
 	// canceling the context provided to Start should not cancel any async processes initiated by the receiver
 	cancelFn()
@@ -132,9 +133,9 @@ func assertIncludesExpectedMetrics(t *testing.T, got pmetric.Metrics) {
 		assert.Equal(t, conventions.SchemaURL, rm.SchemaUrl(),
 			"SchemaURL is incorrect for metrics: %v", returnedMetricNames)
 		if rm.Resource().Attributes().Len() == 0 {
-			appendMapInto(returnedMetrics, returnedMetricNames)
+			maps.Copy(returnedMetrics, returnedMetricNames)
 		} else {
-			appendMapInto(returnedResourceMetrics, returnedMetricNames)
+			maps.Copy(returnedResourceMetrics, returnedMetricNames)
 		}
 	}
 
@@ -174,12 +175,6 @@ func getReturnedMetricNames(metrics pmetric.MetricSlice) map[string]struct{} {
 	return metricNames
 }
 
-func appendMapInto(m1, m2 map[string]struct{}) {
-	for k, v := range m2 {
-		m1[k] = v
-	}
-}
-
 var mockType = component.MustNewType("mock")
 
 type mockConfig struct{}
@@ -198,7 +193,7 @@ func TestGatherMetrics_ScraperKeyConfigError(t *testing.T) {
 	}()
 
 	cfg := &Config{Scrapers: map[component.Type]component.Config{component.MustNewType("error"): &mockConfig{}}}
-	_, err := NewFactory().CreateMetrics(context.Background(), creationSet, cfg, consumertest.NewNop())
+	_, err := NewFactory().CreateMetrics(t.Context(), creationSet, cfg, consumertest.NewNop())
 	require.Error(t, err)
 }
 
@@ -211,7 +206,7 @@ func TestGatherMetrics_CreateMetricsError(t *testing.T) {
 	}()
 
 	cfg := &Config{Scrapers: map[component.Type]component.Config{mockType: &mockConfig{}}}
-	_, err := NewFactory().CreateMetrics(context.Background(), creationSet, cfg, consumertest.NewNop())
+	_, err := NewFactory().CreateMetrics(t.Context(), creationSet, cfg, consumertest.NewNop())
 	require.Error(t, err)
 }
 
@@ -239,17 +234,16 @@ func benchmarkScrapeMetrics(b *testing.B, cfg *Config) {
 	sink := &notifyingSink{ch: make(chan int, 10)}
 	tickerCh := make(chan time.Time)
 
-	options, err := createAddScraperOptions(context.Background(), cfg, scraperFactories)
+	options, err := createAddScraperOptions(b.Context(), cfg, scraperFactories)
 	require.NoError(b, err)
 	options = append(options, scraperhelper.WithTickerChannel(tickerCh))
 
 	receiver, err := scraperhelper.NewMetricsController(&cfg.ControllerConfig, receivertest.NewNopSettings(metadata.Type), sink, options...)
 	require.NoError(b, err)
 
-	require.NoError(b, receiver.Start(context.Background(), componenttest.NewNopHost()))
+	require.NoError(b, receiver.Start(b.Context(), componenttest.NewNopHost()))
 
-	b.ResetTimer()
-	for n := 0; n < b.N; n++ {
+	for b.Loop() {
 		tickerCh <- time.Now()
 		<-sink.ch
 	}

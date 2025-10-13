@@ -5,6 +5,7 @@ package vcenterreceiver // import "github.com/open-telemetry/opentelemetry-colle
 
 import (
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/vmware/govmomi/vim25/mo"
@@ -157,9 +158,7 @@ func (v *vcenterMetricScraper) processHosts(
 
 		// Populate master VM to CR relationship map from
 		// single Host based version of it
-		for vmRef, csRef := range hsVMRefToComputeRef {
-			vmRefToComputeRef[vmRef] = csRef
-		}
+		maps.Copy(vmRefToComputeRef, hsVMRefToComputeRef)
 	}
 
 	return vmRefToComputeRef
@@ -307,7 +306,7 @@ func (v *vcenterMetricScraper) buildVMMetrics(
 	}
 
 	groupInfo = &vmGroupInfo{poweredOff: 0, poweredOn: 0, suspended: 0, templates: 0}
-	if vm.Config.Template {
+	if vm.Config != nil && vm.Config.Template {
 		groupInfo.templates++
 	} else {
 		switch vm.Runtime.PowerState {
