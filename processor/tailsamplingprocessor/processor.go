@@ -74,12 +74,12 @@ type tailSamplingSpanProcessor struct {
 
 	host component.Host
 
-	offloadToDisk      bool
-	storageManager     *eventstorage.StorageManager
-	smStopping         chan struct{}
-	smErrGroup         errgroup.Group
-	decisionWait       time.Duration
-	rw                 eventstorage.RW
+	offloadToDisk  bool
+	storageManager *eventstorage.StorageManager
+	smStopping     chan struct{}
+	smErrGroup     errgroup.Group
+	decisionWait   time.Duration
+	rw             eventstorage.RW
 }
 
 type traceLimiter interface {
@@ -154,7 +154,9 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 	tsp.policyTicker = &timeutils.PolicyTicker{OnTickFunc: tsp.samplingPolicyOnTick}
 
 	var tl traceLimiter
-	if cfg.BlockOnOverflow {
+	if cfg.OffloadToDisk {
+		tl = tracelimiter.NewNoopTracesLimiter()
+	} else if cfg.BlockOnOverflow {
 		tl = tracelimiter.NewBlockingTracesLimiter(cfg.NumTraces)
 	} else {
 		tl = tracelimiter.NewDropOldTracesLimiter(cfg.NumTraces, tsp.dropTrace)
