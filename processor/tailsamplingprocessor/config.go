@@ -6,6 +6,8 @@ package tailsamplingprocessor // import "github.com/open-telemetry/opentelemetry
 import (
 	"time"
 
+	"go.opentelemetry.io/collector/component"
+
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
 
@@ -321,6 +323,9 @@ type Config struct {
 	PolicyCfgs []PolicyCfg `mapstructure:"policies"`
 	// DecisionCache holds configuration for the decision cache(s)
 	DecisionCache DecisionCacheConfig `mapstructure:"decision_cache"`
+	// TailStorageID specifies an optional tail storage extension to use for buffering spans.
+	// If not set, in-memory tail storage is used.
+	TailStorageID *component.ID `mapstructure:"tail_storage"`
 	// Options allows for additional configuration of the tail-based sampling processor in code.
 	Options []Option `mapstructure:"-"`
 	// Make decision as soon as a policy matches

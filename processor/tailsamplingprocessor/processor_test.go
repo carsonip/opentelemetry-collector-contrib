@@ -32,6 +32,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/idbatcher"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/tailstorageextension"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/pkg/samplingpolicy"
 )
 
@@ -51,6 +52,7 @@ var (
 			},
 		},
 	}
+	testExtensionID = component.MustNewID("my_extension")
 )
 
 type TestPolicyEvaluator struct {
@@ -1351,6 +1353,97 @@ func TestExtension(t *testing.T) {
 	assert.Equal(t, map[string]any{"foo": "bar"}, host.extension.cfg)
 }
 
+func TestTailStorageExtensionFromHost(t *testing.T) {
+	controller := newTestTSPController()
+	msp := new(consumertest.TracesSink)
+
+	cfg := Config{
+		DecisionWait:  defaultTestDecisionWait,
+		NumTraces:     defaultNumTraces,
+		PolicyCfgs:    testPolicy,
+		TailStorageID: &testExtensionID,
+		Options: []Option{
+			withTestController(controller),
+		},
+	}
+	p, err := newTracesProcessor(t.Context(), processortest.NewNopSettings(metadata.Type), msp, cfg)
+	require.NoError(t, err)
+
+	host := &extensionHost{}
+	require.NoError(t, p.Start(t.Context(), host))
+	defer func() {
+		require.NoError(t, p.Shutdown(t.Context()))
+	}()
+
+	require.NoError(t, p.ConsumeTraces(t.Context(), simpleTraces()))
+	controller.waitForTick()
+	controller.waitForTick()
+
+	assert.Len(t, msp.AllTraces(), 1)
+	assert.Greater(t, host.extension.appendCount, 0)
+	assert.Greater(t, host.extension.takeCount, 0)
+}
+
+func TestTailStorageExtensionNotConfigured(t *testing.T) {
+	controller := newTestTSPController()
+	msp := new(consumertest.TracesSink)
+
+	cfg := Config{
+		DecisionWait: defaultTestDecisionWait,
+		NumTraces:    defaultNumTraces,
+		PolicyCfgs:   testPolicy,
+		Options: []Option{
+			withTestController(controller),
+		},
+	}
+	p, err := newTracesProcessor(t.Context(), processortest.NewNopSettings(metadata.Type), msp, cfg)
+	require.NoError(t, err)
+
+	host := &extensionHost{}
+	require.NoError(t, p.Start(t.Context(), host))
+	defer func() {
+		require.NoError(t, p.Shutdown(t.Context()))
+	}()
+
+	require.NoError(t, p.ConsumeTraces(t.Context(), simpleTraces()))
+	controller.waitForTick()
+	controller.waitForTick()
+
+	assert.Len(t, msp.AllTraces(), 1)
+	assert.Zero(t, host.extension.appendCount)
+	assert.Zero(t, host.extension.takeCount)
+}
+
+func TestTailStorageExtensionNotFound(t *testing.T) {
+	cfg := Config{
+		DecisionWait:  defaultTestDecisionWait,
+		NumTraces:     defaultNumTraces,
+		PolicyCfgs:    testPolicy,
+		TailStorageID: &testExtensionID,
+	}
+	p, err := newTracesProcessor(t.Context(), processortest.NewNopSettings(metadata.Type), consumertest.NewNop(), cfg)
+	require.NoError(t, err)
+
+	err = p.Start(t.Context(), componenttest.NewNopHost())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tail storage extension 'my_extension' not found")
+}
+
+func TestTailStorageExtensionWrongType(t *testing.T) {
+	cfg := Config{
+		DecisionWait:  defaultTestDecisionWait,
+		NumTraces:     defaultNumTraces,
+		PolicyCfgs:    testPolicy,
+		TailStorageID: &testExtensionID,
+	}
+	p, err := newTracesProcessor(t.Context(), processortest.NewNopSettings(metadata.Type), consumertest.NewNop(), cfg)
+	require.NoError(t, err)
+
+	err = p.Start(t.Context(), &nonTailStorageExtensionHost{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-tail-storage extension 'my_extension' found")
+}
+
 type extensionHost struct {
 	extension *extension
 }
@@ -1360,22 +1453,51 @@ func (h *extensionHost) GetExtensions() map[component.ID]component.Component {
 		h.extension = &extension{}
 	}
 	return map[component.ID]component.Component{
-		component.MustNewID("my_extension"): h.extension,
+		testExtensionID: h.extension,
 	}
 }
 
 type extension struct {
 	policyName string
 	cfg        map[string]any
+	storage    tailstorageextension.TailStorage
+	appendCount,
+	takeCount,
+	deleteCount int
 }
 
 var _ samplingpolicy.Extension = &extension{}
+var _ tailstorageextension.TailStorage = &extension{}
 
 // NewEvaluator implements samplingpolicy.Extension.
 func (e *extension) NewEvaluator(policyName string, cfg map[string]any) (samplingpolicy.Evaluator, error) {
 	e.policyName = policyName
 	e.cfg = cfg
 	return nil, nil
+}
+
+func (e *extension) ensureStorage() {
+	if e.storage == nil {
+		e.storage = tailstorageextension.NewInMemoryTailStorage()
+	}
+}
+
+func (e *extension) Append(traceID pcommon.TraceID, rss ptrace.ResourceSpans) {
+	e.ensureStorage()
+	e.storage.Append(traceID, rss)
+	e.appendCount++
+}
+
+func (e *extension) Take(traceID pcommon.TraceID) (ptrace.Traces, bool) {
+	e.ensureStorage()
+	e.takeCount++
+	return e.storage.Take(traceID)
+}
+
+func (e *extension) Delete(traceID pcommon.TraceID) {
+	e.ensureStorage()
+	e.storage.Delete(traceID)
+	e.deleteCount++
 }
 
 // Start implements component.Component.
@@ -1385,5 +1507,23 @@ func (*extension) Start(_ context.Context, _ component.Host) error {
 
 // Shutdown implements component.Component.
 func (*extension) Shutdown(_ context.Context) error {
+	return nil
+}
+
+type nonTailStorageExtensionHost struct{}
+
+func (h *nonTailStorageExtensionHost) GetExtensions() map[component.ID]component.Component {
+	return map[component.ID]component.Component{
+		testExtensionID: &nonTailStorageExtension{},
+	}
+}
+
+type nonTailStorageExtension struct{}
+
+func (*nonTailStorageExtension) Start(context.Context, component.Host) error {
+	return nil
+}
+
+func (*nonTailStorageExtension) Shutdown(context.Context) error {
 	return nil
 }

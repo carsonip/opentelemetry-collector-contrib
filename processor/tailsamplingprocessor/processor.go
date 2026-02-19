@@ -153,6 +153,13 @@ func (*tailSamplingSpanProcessor) Capabilities() consumer.Capabilities {
 // Start is invoked during service startup.
 func (tsp *tailSamplingSpanProcessor) Start(_ context.Context, host component.Host) error {
 	tsp.host = host
+	tailStorageExt, hasTailStorageExt, err := tailStorageExtension(host, tsp.cfg.TailStorageID)
+	if err != nil {
+		return err
+	}
+	if hasTailStorageExt {
+		tsp.tailStorage = tailStorageExt
+	}
 	policies, err := tsp.loadSamplingPolicies(host, tsp.cfg.PolicyCfgs)
 	if err != nil {
 		return err
@@ -827,6 +834,24 @@ func extensions(host component.Host) map[string]samplingpolicy.Extension {
 		}
 	}
 	return scoped
+}
+
+func tailStorageExtension(host component.Host, storageID *component.ID) (tailstorageextension.TailStorage, bool, error) {
+	if storageID == nil {
+		return nil, false, nil
+	}
+	if host == nil {
+		return nil, false, errors.New("tail storage extension configured but host is nil")
+	}
+	extension, ok := host.GetExtensions()[*storageID]
+	if !ok {
+		return nil, false, fmt.Errorf("tail storage extension '%s' not found", storageID)
+	}
+	storageExtension, ok := extension.(tailstorageextension.TailStorage)
+	if !ok {
+		return nil, false, fmt.Errorf("non-tail-storage extension '%s' found", storageID)
+	}
+	return storageExtension, true, nil
 }
 
 // Shutdown is invoked during service shutdown.
