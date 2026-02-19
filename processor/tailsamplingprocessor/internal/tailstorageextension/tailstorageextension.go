@@ -19,6 +19,11 @@ import (
 //
 // Implementations may perform physical cleanup lazily as long as the operations
 // above are logically immediate from the caller's perspective.
+//
+// Concurrency contract:
+//   - TailStorage does not require implementations to provide internal locking.
+//   - The current caller is tailsamplingprocessor, and it serializes calls.
+//   - Implementations may add internal synchronization, but it is optional.
 type TailStorage interface {
 	// Append adds a resource-span batch to the current payload for traceID.
 	// A moved-from rss must not be used by the caller after this call.
