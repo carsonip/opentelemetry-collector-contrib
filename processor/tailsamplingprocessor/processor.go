@@ -26,6 +26,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/idbatcher"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/sampling"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/tailstorageextension"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/telemetry"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/pkg/samplingpolicy"
 )
@@ -45,10 +46,9 @@ type policy struct {
 // that tracks information related to the decision making process but not
 // needed by any sampler implementations.
 type traceData struct {
-	samplingpolicy.TraceData
-
 	arrivalTime   time.Time
 	decisionTime  time.Time
+	spanCount     int64
 	bytes         uint64
 	finalDecision samplingpolicy.Decision
 	policyName    string
@@ -67,6 +67,7 @@ type tailSamplingSpanProcessor struct {
 	nextConsumer       consumer.Traces
 	policies           []*policy
 	idToTrace          map[pcommon.TraceID]*traceData
+	tailStorage        tailstorageextension.TailStorage
 	tickerFrequency    time.Duration
 	decisionBatcher    idbatcher.Batcher
 	sampledIDCache     cache.Cache
@@ -121,6 +122,7 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 		nonSampledIDCache:  nonSampledDecisions,
 		logger:             set.Logger,
 		idToTrace:          make(map[pcommon.TraceID]*traceData),
+		tailStorage:        tailstorageextension.NewInMemoryTailStorage(),
 		deleteTraceQueue:   list.New(),
 		sampleOnFirstMatch: cfg.SampleOnFirstMatch,
 		blockOnOverflow:    cfg.BlockOnOverflow,
@@ -584,16 +586,23 @@ func (tsp *tailSamplingSpanProcessor) samplingPolicyOnTick() bool {
 			continue
 		}
 
-		trace.decisionTime = time.Now()
+		allSpans, ok := tsp.tailStorage.Take(id)
+		if !ok {
+			metrics.idNotFoundOnMapCount++
+			continue
+		}
 
-		decision, policyName := tsp.makeDecision(id, &trace.TraceData, metrics)
+		trace.decisionTime = time.Now()
+		traceForDecision := samplingpolicy.TraceData{
+			SpanCount:       trace.spanCount,
+			ReceivedBatches: allSpans,
+		}
+		decision, policyName := tsp.makeDecision(id, &traceForDecision, metrics)
 		globalTracesSampledByDecision[decision]++
 
 		// Sampled or not, remove the batches
-		allSpans := trace.ReceivedBatches
 		trace.finalDecision = decision
 		trace.policyName = policyName
-		trace.ReceivedBatches = ptrace.NewTraces()
 
 		if decision == samplingpolicy.Sampled {
 			tsp.releaseSampledTrace(ctx, id, allSpans, policyName)
@@ -748,10 +757,7 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 	if !ok {
 		actualData = &traceData{
 			arrivalTime: currTime,
-			TraceData: samplingpolicy.TraceData{
-				SpanCount:       spanCount,
-				ReceivedBatches: ptrace.NewTraces(),
-			},
+			spanCount:   spanCount,
 		}
 
 		tsp.idToTrace[id] = actualData
@@ -763,7 +769,7 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 			actualData.deleteElement = tsp.deleteTraceQueue.PushBack(id)
 		}
 	} else {
-		actualData.SpanCount += spanCount
+		actualData.spanCount += spanCount
 	}
 	if containsRootSpan && tsp.cfg.DecisionWaitAfterRootReceived > 0 {
 		tsp.decisionBatcher.MoveToEarlierBatch(id, actualData.batchID, uint64(tsp.cfg.DecisionWaitAfterRootReceived.Seconds()))
@@ -788,7 +794,7 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 	if finalDecision == samplingpolicy.Unspecified {
 		// If the final decision hasn't been made, add the new spans to the
 		// existing trace.
-		appendToTraces(actualData.ReceivedBatches, rss)
+		tsp.tailStorage.Append(id, rss)
 		return
 	}
 
@@ -842,6 +848,7 @@ func (tsp *tailSamplingSpanProcessor) dropTrace(traceID pcommon.TraceID, deletio
 	}
 
 	delete(tsp.idToTrace, traceID)
+	tsp.tailStorage.Delete(traceID)
 	if trace.deleteElement != nil {
 		tsp.deleteTraceQueue.Remove(trace.deleteElement)
 	}
