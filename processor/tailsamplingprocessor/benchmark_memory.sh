@@ -186,15 +186,72 @@ wait_for_port() {
   done
 }
 
+port_is_free() {
+  local port="$1"
+  if ss -H -ltn "sport = :${port}" 2>/dev/null | awk 'NF { found = 1 } END { exit found ? 0 : 1 }'; then
+    return 1
+  fi
+  return 0
+}
+
+allocate_metrics_port() {
+  local attempt port
+  for attempt in $(seq 1 200); do
+    port=$((20000 + (RANDOM % 40000)))
+    if port_is_free "$port"; then
+      echo "$port"
+      return 0
+    fi
+  done
+  echo "failed to allocate a free metrics port" >&2
+  return 1
+}
+
 rss_kb() {
   local pid="$1"
   awk '/VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null || echo "0"
+}
+
+capture_metrics() {
+  local port="$1"
+  local out="$2"
+  curl -fsS "http://127.0.0.1:${port}/metrics" >"$out"
+}
+
+sum_prom_metric_from_file() {
+  local file="$1"
+  local metric="$2"
+  awk -v metric="$metric" '
+    $0 ~ "^" metric "([ {]|$)" { sum += $NF; found = 1 }
+    END {
+      if (found) {
+        printf "%.0f\n", sum + 0
+      } else {
+        print ""
+      }
+    }' "$file"
+}
+
+extract_metric_any_name() {
+  local file="$1"
+  shift
+  local metric
+  for metric in "$@"; do
+    local v
+    v=$(sum_prom_metric_from_file "$file" "$metric")
+    if [[ -n "$v" ]]; then
+      echo "$v"
+      return 0
+    fi
+  done
+  echo "0"
 }
 
 make_config() {
   local mode="$1"
   local cfg="$2"
   local pebble_dir="$3"
+  local metrics_port="$4"
   if [[ "$mode" == "inmemory" ]]; then
     cat >"$cfg" <<EOF
 receivers:
@@ -215,6 +272,15 @@ exporters:
   nop:
 
 service:
+  telemetry:
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: ${metrics_port}
   pipelines:
     traces:
       receivers: [otlp]
@@ -249,6 +315,15 @@ exporters:
 
 service:
   extensions: [tail_storage_pebble/local]
+  telemetry:
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: ${metrics_port}
   pipelines:
     traces:
       receivers: [otlp]
@@ -263,10 +338,14 @@ run_mode() {
   local cfg="$mode_dir/config.yaml"
   local log="$mode_dir/collector.log"
   local samples="$mode_dir/rss_samples.csv"
+  local metrics_start_file="$mode_dir/metrics_start.prom"
+  local metrics_end_file="$mode_dir/metrics_end.prom"
   local pebble_dir="$mode_dir/pebble"
+  local metrics_port
   mkdir -p "$mode_dir" "$pebble_dir"
 
-  make_config "$mode" "$cfg" "$pebble_dir"
+  metrics_port=$(allocate_metrics_port)
+  make_config "$mode" "$cfg" "$pebble_dir" "$metrics_port"
   : >"$samples"
   echo "elapsed_seconds,rss_kb" >>"$samples"
 
@@ -275,6 +354,14 @@ run_mode() {
 
   if ! wait_for_port "127.0.0.1" "$OTLP_PORT" 20; then
     echo "collector failed to open port for mode=$mode; see $log" >&2
+    return 1
+  fi
+  if ! wait_for_port "127.0.0.1" "$metrics_port" 20; then
+    echo "collector failed to open metrics port for mode=$mode; see $log" >&2
+    return 1
+  fi
+  if ! capture_metrics "$metrics_port" "$metrics_start_file"; then
+    echo "collector metrics endpoint unavailable for mode=$mode; see $log" >&2
     return 1
   fi
 
@@ -315,11 +402,29 @@ run_mode() {
 
   wait "$telemetry_pid"
 
+  if ! capture_metrics "$metrics_port" "$metrics_end_file"; then
+    echo "collector metrics endpoint unavailable after load for mode=$mode; see $log" >&2
+    return 1
+  fi
+
   kill "$COLLECTOR_PID" >/dev/null 2>&1 || true
   wait "$COLLECTOR_PID" >/dev/null 2>&1 || true
   COLLECTOR_PID=""
 
-  MODE="$mode" awk -F',' '
+  local recv_start recv_end recv_delta recv_sps
+  local sampled_traces_start sampled_traces_end sampled_traces_delta sampled_spans_delta sampled_sps spans_per_trace
+  recv_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
+  recv_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
+  sampled_traces_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
+  sampled_traces_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
+  recv_delta=$(awk -v e="$recv_end" -v s="$recv_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
+  sampled_traces_delta=$(awk -v e="$sampled_traces_end" -v s="$sampled_traces_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
+  spans_per_trace=$((CHILD_SPANS + 1))
+  sampled_spans_delta=$(awk -v t="$sampled_traces_delta" -v spt="$spans_per_trace" 'BEGIN { printf "%.0f", (t + 0) * (spt + 0) }')
+  recv_sps=$(awk -v d="$recv_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
+  sampled_sps=$(awk -v d="$sampled_spans_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
+
+  MODE="$mode" RECV_DELTA="$recv_delta" RECV_SPS="$recv_sps" SAMPLED_SPANS_DELTA="$sampled_spans_delta" SAMPLED_SPS="$sampled_sps" awk -F',' '
     NR==1 { next }
     {
       c++
@@ -329,11 +434,12 @@ run_mode() {
     }
     END {
       if (c == 0) {
-        printf "mode=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0\n", ENVIRON["MODE"]
+        printf "mode=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 recv_spans=0 sampled_spans=0 recv_sps=0 sampled_sps=0\n", ENVIRON["MODE"]
         exit
       }
-      printf "mode=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f\n",
-             ENVIRON["MODE"], c, max/1024.0, (sum/c)/1024.0, last/1024.0
+      printf "mode=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f recv_spans=%s sampled_spans=%s recv_sps=%s sampled_sps=%s\n",
+             ENVIRON["MODE"], c, max/1024.0, (sum/c)/1024.0, last/1024.0,
+             ENVIRON["RECV_DELTA"], ENVIRON["SAMPLED_SPANS_DELTA"], ENVIRON["RECV_SPS"], ENVIRON["SAMPLED_SPS"]
     }' "$samples"
 }
 
@@ -362,4 +468,9 @@ echo "  $OUTPUT_DIR/pebble/rss_samples.csv"
 echo "Collector logs:"
 echo "  $OUTPUT_DIR/inmemory/collector.log"
 echo "  $OUTPUT_DIR/pebble/collector.log"
+echo "Collector metrics snapshots:"
+echo "  $OUTPUT_DIR/inmemory/metrics_start.prom"
+echo "  $OUTPUT_DIR/inmemory/metrics_end.prom"
+echo "  $OUTPUT_DIR/pebble/metrics_start.prom"
+echo "  $OUTPUT_DIR/pebble/metrics_end.prom"
 
