@@ -212,6 +212,11 @@ rss_kb() {
   awk '/VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null || echo "0"
 }
 
+proc_cpu_jiffies() {
+  local pid="$1"
+  awk '{print $14 + $15}' "/proc/$pid/stat" 2>/dev/null || echo ""
+}
+
 capture_metrics() {
   local port="$1"
   local out="$2"
@@ -347,7 +352,7 @@ run_mode() {
   metrics_port=$(allocate_metrics_port)
   make_config "$mode" "$cfg" "$pebble_dir" "$metrics_port"
   : >"$samples"
-  echo "elapsed_seconds,rss_kb" >>"$samples"
+  echo "elapsed_seconds,rss_kb,cpu_pct" >>"$samples"
 
   "$OTELCOL_BIN" --config "$cfg" >"$log" 2>&1 &
   COLLECTOR_PID=$!
@@ -379,15 +384,37 @@ run_mode() {
   local telemetry_pid=$!
 
   local start_s now_s elapsed_s total_runtime_s
+  local hz prev_cpu_jiffies prev_cpu_time_s
   start_s=$(date +%s.%N)
+  hz=$(getconf CLK_TCK 2>/dev/null || echo "100")
+  prev_cpu_jiffies=$(proc_cpu_jiffies "$COLLECTOR_PID")
+  prev_cpu_time_s="$start_s"
   total_runtime_s=$(awk -v a="$LOAD_SEC" -v b="$POST_WAIT_SEC" 'BEGIN { printf "%.9f", (a + 0) + (b + 0) }')
 
   while true; do
     now_s=$(date +%s.%N)
     elapsed_s=$(awk -v n="$now_s" -v s="$start_s" 'BEGIN { printf "%.9f", (n + 0) - (s + 0) }')
     local rss
+    local cpu_jiffies cpu_pct
     rss=$(rss_kb "$COLLECTOR_PID")
-    awk -v elapsed="$elapsed_s" -v rss="$rss" 'BEGIN { printf "%.3f,%d\n", elapsed + 0, rss + 0 }' >>"$samples"
+    cpu_jiffies=$(proc_cpu_jiffies "$COLLECTOR_PID")
+    cpu_pct=$(awk -v curr="${cpu_jiffies:-}" -v prev="${prev_cpu_jiffies:-}" -v now="$now_s" -v ptime="$prev_cpu_time_s" -v hz="$hz" '
+      BEGIN {
+        if (curr == "" || prev == "" || hz + 0 <= 0) {
+          print "0.00"
+          exit
+        }
+        dt = (now + 0) - (ptime + 0)
+        dj = (curr + 0) - (prev + 0)
+        if (dt <= 0 || dj < 0) {
+          print "0.00"
+          exit
+        }
+        printf "%.2f", (dj / (hz + 0)) / dt * 100.0
+      }')
+    awk -v elapsed="$elapsed_s" -v rss="$rss" -v cpu="$cpu_pct" 'BEGIN { printf "%.3f,%d,%.2f\n", elapsed + 0, rss + 0, cpu + 0 }' >>"$samples"
+    prev_cpu_jiffies="$cpu_jiffies"
+    prev_cpu_time_s="$now_s"
 
     local telemetry_alive="false"
     if kill -0 "$telemetry_pid" 2>/dev/null; then
@@ -428,17 +455,20 @@ run_mode() {
     NR==1 { next }
     {
       c++
-      sum+=$2
-      if ($2 > max) max=$2
-      last=$2
+      sum_rss+=$2
+      if ($2 > max_rss) max_rss=$2
+      last_rss=$2
+      sum_cpu+=$3
+      if ($3 > max_cpu) max_cpu=$3
+      last_cpu=$3
     }
     END {
       if (c == 0) {
-        printf "mode=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 recv_spans=0 sampled_spans=0 recv_sps=0 sampled_sps=0\n", ENVIRON["MODE"]
+        printf "mode=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 cpu_avg_pct=0 cpu_peak_pct=0 cpu_final_pct=0 recv_spans=0 sampled_spans=0 recv_sps=0 sampled_sps=0\n", ENVIRON["MODE"]
         exit
       }
-      printf "mode=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f recv_spans=%s sampled_spans=%s recv_sps=%s sampled_sps=%s\n",
-             ENVIRON["MODE"], c, max/1024.0, (sum/c)/1024.0, last/1024.0,
+      printf "mode=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f cpu_avg_pct=%.2f cpu_peak_pct=%.2f cpu_final_pct=%.2f recv_spans=%s sampled_spans=%s recv_sps=%s sampled_sps=%s\n",
+             ENVIRON["MODE"], c, max_rss/1024.0, (sum_rss/c)/1024.0, last_rss/1024.0, (sum_cpu/c), max_cpu, last_cpu,
              ENVIRON["RECV_DELTA"], ENVIRON["SAMPLED_SPANS_DELTA"], ENVIRON["RECV_SPS"], ENVIRON["SAMPLED_SPS"]
     }' "$samples"
 }
