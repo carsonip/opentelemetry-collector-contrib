@@ -11,7 +11,7 @@ VERBOSE="false"
 
 usage() {
   cat <<'EOF'
-Run tail sampling memory benchmark and print a compact comparison summary.
+Run tail sampling memory benchmark and print a compact matrix summary.
 
 Usage:
   bash processor/tailsamplingprocessor/benchmark_memory_compare.sh [options] [benchmark_memory.sh options]
@@ -26,7 +26,8 @@ Examples:
 
 Notes:
   - All non-wrapper arguments are forwarded to benchmark_memory.sh.
-  - Both backends (inmemory and pebble) always run under identical settings.
+  - The benchmark runs 4 scenarios:
+      inmemory_root_false, inmemory_root_true, pebble_root_false, pebble_root_true
 EOF
 }
 
@@ -91,11 +92,13 @@ extract_field() {
     }' <<<"$line"
 }
 
-inmemory_line=$(extract_line '^mode=inmemory ')
-pebble_line=$(extract_line '^mode=pebble ')
+inmemory_root_false_line=$(extract_line '^mode=inmemory_root_false ')
+inmemory_root_true_line=$(extract_line '^mode=inmemory_root_true ')
+pebble_root_false_line=$(extract_line '^mode=pebble_root_false ')
+pebble_root_true_line=$(extract_line '^mode=pebble_root_true ')
 
-if [[ -z "$inmemory_line" || -z "$pebble_line" ]]; then
-  echo "unable to parse benchmark output for both modes; raw output:" >&2
+if [[ -z "$inmemory_root_false_line" || -z "$inmemory_root_true_line" || -z "$pebble_root_false_line" || -z "$pebble_root_true_line" ]]; then
+  echo "unable to parse benchmark output for all 4 modes; raw output:" >&2
   cat "$run_log" >&2
   exit 1
 fi
@@ -106,77 +109,91 @@ rate_worker=$(extract_value_after_colon 'rate/worker:')
 workers=$(extract_value_after_colon 'workers:')
 child_spans=$(extract_value_after_colon 'child_spans:')
 load_size_mb=$(extract_value_after_colon 'load_size_mb:')
+sample_rate=$(extract_value_after_colon 'sample_rate:')
+split_trace_requests=$(extract_value_after_colon 'split_trace_requests:')
 output_dir=$(extract_value_after_colon 'output_dir:')
 
-im_samples=$(extract_field "$inmemory_line" "samples")
-im_peak=$(extract_field "$inmemory_line" "peak_mb")
-im_avg=$(extract_field "$inmemory_line" "avg_mb")
-im_final=$(extract_field "$inmemory_line" "final_mb")
-im_cpu_avg=$(extract_field "$inmemory_line" "cpu_avg_pct")
-im_cpu_peak=$(extract_field "$inmemory_line" "cpu_peak_pct")
-im_recv_sps=$(extract_field "$inmemory_line" "recv_sps")
-im_sampled_sps=$(extract_field "$inmemory_line" "sampled_sps")
+print_mode_row() {
+  local label="$1"
+  local line="$2"
+  local samples peak avg final cpu_avg cpu_peak recv_sps trace_sps est_take_sps sampled_sps
+  samples=$(extract_field "$line" "samples")
+  peak=$(extract_field "$line" "peak_mb")
+  avg=$(extract_field "$line" "avg_mb")
+  final=$(extract_field "$line" "final_mb")
+  cpu_avg=$(extract_field "$line" "cpu_avg_pct")
+  cpu_peak=$(extract_field "$line" "cpu_peak_pct")
+  recv_sps=$(extract_field "$line" "recv_sps")
+  trace_sps=$(extract_field "$line" "trace_sps")
+  est_take_sps=$(extract_field "$line" "estimated_take_sps")
+  sampled_sps=$(extract_field "$line" "sampled_sps")
+  printf "%-22s %8s %9s %9s %9s %8s %8s %9s %9s %9s %10s\n" "$label" "$samples" "$peak" "$avg" "$final" "$cpu_avg" "$cpu_peak" "$recv_sps" "$trace_sps" "$est_take_sps" "$sampled_sps"
+}
 
-pb_samples=$(extract_field "$pebble_line" "samples")
-pb_peak=$(extract_field "$pebble_line" "peak_mb")
-pb_avg=$(extract_field "$pebble_line" "avg_mb")
-pb_final=$(extract_field "$pebble_line" "final_mb")
-pb_cpu_avg=$(extract_field "$pebble_line" "cpu_avg_pct")
-pb_cpu_peak=$(extract_field "$pebble_line" "cpu_peak_pct")
-pb_recv_sps=$(extract_field "$pebble_line" "recv_sps")
-pb_sampled_sps=$(extract_field "$pebble_line" "sampled_sps")
+print_delta_block() {
+  local title="$1"
+  local line_a="$2"
+  local line_b="$3"
+  local a_peak a_avg a_final a_cpu_avg a_cpu_peak a_recv a_trace a_take a_sampled
+  local b_peak b_avg b_final b_cpu_avg b_cpu_peak b_recv b_trace b_take b_sampled
+  a_peak=$(extract_field "$line_a" "peak_mb")
+  a_avg=$(extract_field "$line_a" "avg_mb")
+  a_final=$(extract_field "$line_a" "final_mb")
+  a_cpu_avg=$(extract_field "$line_a" "cpu_avg_pct")
+  a_cpu_peak=$(extract_field "$line_a" "cpu_peak_pct")
+  a_recv=$(extract_field "$line_a" "recv_sps")
+  a_trace=$(extract_field "$line_a" "trace_sps")
+  a_take=$(extract_field "$line_a" "estimated_take_sps")
+  a_sampled=$(extract_field "$line_a" "sampled_sps")
+  b_peak=$(extract_field "$line_b" "peak_mb")
+  b_avg=$(extract_field "$line_b" "avg_mb")
+  b_final=$(extract_field "$line_b" "final_mb")
+  b_cpu_avg=$(extract_field "$line_b" "cpu_avg_pct")
+  b_cpu_peak=$(extract_field "$line_b" "cpu_peak_pct")
+  b_recv=$(extract_field "$line_b" "recv_sps")
+  b_trace=$(extract_field "$line_b" "trace_sps")
+  b_take=$(extract_field "$line_b" "estimated_take_sps")
+  b_sampled=$(extract_field "$line_b" "sampled_sps")
 
-read -r delta_peak pct_peak delta_avg pct_avg delta_final pct_final ratio_peak ratio_avg ratio_final \
-  delta_cpu_avg pct_cpu_avg ratio_cpu_avg delta_cpu_peak pct_cpu_peak ratio_cpu_peak \
-  delta_recv_sps pct_recv_sps ratio_recv_sps delta_sampled_sps pct_sampled_sps ratio_sampled_sps <<EOF
-$(awk -v im_peak="$im_peak" -v pb_peak="$pb_peak" \
-      -v im_avg="$im_avg" -v pb_avg="$pb_avg" \
-      -v im_final="$im_final" -v pb_final="$pb_final" \
-      -v im_cpu_avg="$im_cpu_avg" -v pb_cpu_avg="$pb_cpu_avg" \
-      -v im_cpu_peak="$im_cpu_peak" -v pb_cpu_peak="$pb_cpu_peak" \
-      -v im_recv_sps="$im_recv_sps" -v pb_recv_sps="$pb_recv_sps" \
-      -v im_sampled_sps="$im_sampled_sps" -v pb_sampled_sps="$pb_sampled_sps" '
-  BEGIN {
-    dpeak = im_peak - pb_peak
-    davg = im_avg - pb_avg
-    dfinal = im_final - pb_final
-    dcpuavg = im_cpu_avg - pb_cpu_avg
-    dcpupeak = im_cpu_peak - pb_cpu_peak
-    drecv = im_recv_sps - pb_recv_sps
-    dsampled = im_sampled_sps - pb_sampled_sps
-    ppeak = (pb_peak == 0 ? 0 : (dpeak / pb_peak) * 100.0)
-    pavg = (pb_avg == 0 ? 0 : (davg / pb_avg) * 100.0)
-    pfinal = (pb_final == 0 ? 0 : (dfinal / pb_final) * 100.0)
-    pcpuavg = (pb_cpu_avg == 0 ? 0 : (dcpuavg / pb_cpu_avg) * 100.0)
-    pcpupeak = (pb_cpu_peak == 0 ? 0 : (dcpupeak / pb_cpu_peak) * 100.0)
-    precv = (pb_recv_sps == 0 ? 0 : (drecv / pb_recv_sps) * 100.0)
-    psampled = (pb_sampled_sps == 0 ? 0 : (dsampled / pb_sampled_sps) * 100.0)
-    rpeak = (pb_peak == 0 ? 0 : im_peak / pb_peak)
-    ravg = (pb_avg == 0 ? 0 : im_avg / pb_avg)
-    rfinal = (pb_final == 0 ? 0 : im_final / pb_final)
-    rcpuavg = (pb_cpu_avg == 0 ? 0 : im_cpu_avg / pb_cpu_avg)
-    rcpupeak = (pb_cpu_peak == 0 ? 0 : im_cpu_peak / pb_cpu_peak)
-    rrecv = (pb_recv_sps == 0 ? 0 : im_recv_sps / pb_recv_sps)
-    rsampled = (pb_sampled_sps == 0 ? 0 : im_sampled_sps / pb_sampled_sps)
-    printf "%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f\n",
-           dpeak, ppeak, davg, pavg, dfinal, pfinal, rpeak, ravg, rfinal,
-           dcpuavg, pcpuavg, rcpuavg, dcpupeak, pcpupeak, rcpupeak,
-           drecv, precv, rrecv, dsampled, psampled, rsampled
-  }')
-EOF
+  echo
+  echo "$title"
+  awk \
+    -v a_peak="$a_peak" -v a_avg="$a_avg" -v a_final="$a_final" \
+    -v a_cpu_avg="$a_cpu_avg" -v a_cpu_peak="$a_cpu_peak" \
+    -v a_recv="$a_recv" -v a_trace="$a_trace" -v a_take="$a_take" -v a_sampled="$a_sampled" \
+    -v b_peak="$b_peak" -v b_avg="$b_avg" -v b_final="$b_final" \
+    -v b_cpu_avg="$b_cpu_avg" -v b_cpu_peak="$b_cpu_peak" \
+    -v b_recv="$b_recv" -v b_trace="$b_trace" -v b_take="$b_take" -v b_sampled="$b_sampled" '
+    function line(name, d, base) {
+      pct = (base == 0 ? 0 : (d / base) * 100.0)
+      ratio = (base == 0 ? 0 : (d + base) / base)
+      printf "%-30s %10.2f (%+.2f%%, %.2fx)\n", name, d, pct, ratio
+    }
+    BEGIN {
+      line("peak delta:", b_peak - a_peak, a_peak)
+      line("avg delta:", b_avg - a_avg, a_avg)
+      line("final delta:", b_final - a_final, a_final)
+      line("avg CPU delta:", b_cpu_avg - a_cpu_avg, a_cpu_avg)
+      line("peak CPU delta:", b_cpu_peak - a_cpu_peak, a_cpu_peak)
+      line("recv throughput delta:", b_recv - a_recv, a_recv)
+      line("trace throughput delta:", b_trace - a_trace, a_trace)
+      line("estimated take/s delta:", b_take - a_take, a_take)
+      line("sampled throughput delta:", b_sampled - a_sampled, a_sampled)
+    }'
+}
 
 echo "=== tail sampling memory comparison ==="
-echo "settings: decision_wait=${decision_wait}, effective_duration=${effective_duration}, rate/worker=${rate_worker}, workers=${workers}, child_spans=${child_spans}, load_size_mb=${load_size_mb}"
+echo "settings: decision_wait=${decision_wait}, effective_duration=${effective_duration}, rate/worker=${rate_worker}, workers=${workers}, child_spans=${child_spans}, load_size_mb=${load_size_mb}, sample_rate=${sample_rate}, split_trace_requests=${split_trace_requests}"
 echo
-printf "%-10s %8s %10s %10s %10s %10s %10s %10s %12s\n" "mode" "samples" "peak_mb" "avg_mb" "final_mb" "cpu_avg" "cpu_peak" "recv_sps" "sampled_sps"
-printf "%-10s %8s %10s %10s %10s %10s %10s %10s %12s\n" "inmemory" "$im_samples" "$im_peak" "$im_avg" "$im_final" "$im_cpu_avg" "$im_cpu_peak" "$im_recv_sps" "$im_sampled_sps"
-printf "%-10s %8s %10s %10s %10s %10s %10s %10s %12s\n" "pebble" "$pb_samples" "$pb_peak" "$pb_avg" "$pb_final" "$pb_cpu_avg" "$pb_cpu_peak" "$pb_recv_sps" "$pb_sampled_sps"
-echo
-printf "%-30s %10.2f MB (%+.2f%%, %.2fx)\n" "peak delta (im - pebble):" "$delta_peak" "$pct_peak" "$ratio_peak"
-printf "%-30s %10.2f MB (%+.2f%%, %.2fx)\n" "avg delta (im - pebble):" "$delta_avg" "$pct_avg" "$ratio_avg"
-printf "%-30s %10.2f MB (%+.2f%%, %.2fx)\n" "final delta (im - pebble):" "$delta_final" "$pct_final" "$ratio_final"
-printf "%-30s %10.2f (%+.2f%%, %.2fx)\n" "avg CPU delta:" "$delta_cpu_avg" "$pct_cpu_avg" "$ratio_cpu_avg"
-printf "%-30s %10.2f (%+.2f%%, %.2fx)\n" "peak CPU delta:" "$delta_cpu_peak" "$pct_cpu_peak" "$ratio_cpu_peak"
-printf "%-30s %10.2f (%+.2f%%, %.2fx)\n" "recv throughput delta:" "$delta_recv_sps" "$pct_recv_sps" "$ratio_recv_sps"
-printf "%-30s %10.2f (%+.2f%%, %.2fx)\n" "sampled throughput delta:" "$delta_sampled_sps" "$pct_sampled_sps" "$ratio_sampled_sps"
+printf "%-22s %8s %9s %9s %9s %8s %8s %9s %9s %9s %10s\n" "mode" "samples" "peak_mb" "avg_mb" "final_mb" "cpu_avg" "cpu_peak" "recv_sps" "trace_sps" "take_sps" "sampled_sps"
+print_mode_row "inmemory_root_false" "$inmemory_root_false_line"
+print_mode_row "inmemory_root_true" "$inmemory_root_true_line"
+print_mode_row "pebble_root_false" "$pebble_root_false_line"
+print_mode_row "pebble_root_true" "$pebble_root_true_line"
+
+print_delta_block "storage delta at sample_on_root=false (pebble - inmemory):" "$inmemory_root_false_line" "$pebble_root_false_line"
+print_delta_block "storage delta at sample_on_root=true (pebble - inmemory):" "$inmemory_root_true_line" "$pebble_root_true_line"
+print_delta_block "root-only delta in inmemory (true - false):" "$inmemory_root_false_line" "$inmemory_root_true_line"
+print_delta_block "root-only delta in pebble (true - false):" "$pebble_root_false_line" "$pebble_root_true_line"
+
 echo "artifacts: $output_dir"

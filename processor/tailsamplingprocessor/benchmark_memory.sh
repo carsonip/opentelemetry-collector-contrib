@@ -9,9 +9,11 @@ usage() {
   cat <<'EOF'
 Compare tailsamplingprocessor memory usage under high load.
 
-Runs two scenarios:
-  1) default in-memory tail storage
-  2) tail_storage_pebble extension
+Runs a 2x2 scenario matrix:
+  - storage backend: in-memory vs tail_storage_pebble extension
+  - sample_on_root_span_only: false vs true
+
+Sampling policy is fixed to probabilistic 0.01 (1%).
 
 The telemetry generation duration is always clamped to at least:
   2 * decision_wait
@@ -27,6 +29,7 @@ Options:
   --child-spans <int>           Child spans per trace (default: 2)
   --load-size-mb <int>          Telemetry payload size per span in MB (default: 0)
   --batch-size <int>            telemetrygen batch size (default: 200)
+  --split-trace-requests <bool> Use non-batched exports to split spans across requests (default: true)
   --num-traces <int>            tail_sampling.num_traces (default: 500000)
   --sample-interval <seconds>   RSS sample interval (default: 0.5)
   --otlp-port <int>             OTLP gRPC port for collector (default: 4317)
@@ -49,6 +52,8 @@ WORKERS="4"
 CHILD_SPANS="2"
 LOAD_SIZE_MB="0"
 BATCH_SIZE="200"
+SPLIT_TRACE_REQUESTS="true"
+SAMPLE_RATE="0.01"
 NUM_TRACES="500000"
 SAMPLE_INTERVAL="0.5"
 OTLP_PORT="4317"
@@ -67,6 +72,7 @@ while [[ $# -gt 0 ]]; do
     --child-spans) CHILD_SPANS="$2"; shift 2 ;;
     --load-size-mb) LOAD_SIZE_MB="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
+    --split-trace-requests) SPLIT_TRACE_REQUESTS="$2"; shift 2 ;;
     --num-traces) NUM_TRACES="$2"; shift 2 ;;
     --sample-interval) SAMPLE_INTERVAL="$2"; shift 2 ;;
     --otlp-port) OTLP_PORT="$2"; shift 2 ;;
@@ -253,11 +259,12 @@ extract_metric_any_name() {
 }
 
 make_config() {
-  local mode="$1"
-  local cfg="$2"
-  local pebble_dir="$3"
-  local metrics_port="$4"
-  if [[ "$mode" == "inmemory" ]]; then
+  local storage="$1"
+  local sample_on_root="$2"
+  local cfg="$3"
+  local pebble_dir="$4"
+  local metrics_port="$5"
+  if [[ "$storage" == "inmemory" ]]; then
     cat >"$cfg" <<EOF
 receivers:
   otlp:
@@ -269,9 +276,12 @@ processors:
   tail_sampling:
     decision_wait: ${DECISION_WAIT}
     num_traces: ${NUM_TRACES}
+    sample_on_root_span_only: ${sample_on_root}
     policies:
-      - name: always
-        type: always_sample
+      - name: probabilistic_1pct
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${SAMPLE_RATE}
 
 exporters:
   nop:
@@ -310,10 +320,13 @@ processors:
   tail_sampling:
     decision_wait: ${DECISION_WAIT}
     num_traces: ${NUM_TRACES}
+    sample_on_root_span_only: ${sample_on_root}
     tail_storage: tail_storage_pebble/local
     policies:
-      - name: always
-        type: always_sample
+      - name: probabilistic_1pct
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${SAMPLE_RATE}
 
 exporters:
   nop:
@@ -339,6 +352,8 @@ EOF
 
 run_mode() {
   local mode="$1"
+  local storage="$2"
+  local sample_on_root="$3"
   local mode_dir="$OUTPUT_DIR/$mode"
   local cfg="$mode_dir/config.yaml"
   local log="$mode_dir/collector.log"
@@ -350,7 +365,7 @@ run_mode() {
   mkdir -p "$mode_dir" "$pebble_dir"
 
   metrics_port=$(allocate_metrics_port)
-  make_config "$mode" "$cfg" "$pebble_dir" "$metrics_port"
+  make_config "$storage" "$sample_on_root" "$cfg" "$pebble_dir" "$metrics_port"
   : >"$samples"
   echo "elapsed_seconds,rss_kb,cpu_pct" >>"$samples"
 
@@ -370,6 +385,14 @@ run_mode() {
     return 1
   fi
 
+  local telemetrygen_batch_flags=()
+  if [[ "$SPLIT_TRACE_REQUESTS" == "true" ]]; then
+    # Non-batched export sends spans in separate requests so root is not guaranteed in every request.
+    telemetrygen_batch_flags=(--batch=false)
+  else
+    telemetrygen_batch_flags=(--batch --batch-size "$BATCH_SIZE")
+  fi
+
   "$TELEMETRYGEN_BIN" traces \
     --otlp-endpoint "127.0.0.1:${OTLP_PORT}" \
     --otlp-insecure \
@@ -378,8 +401,7 @@ run_mode() {
     --rate "$RATE" \
     --child-spans "$CHILD_SPANS" \
     --size "$LOAD_SIZE_MB" \
-    --batch \
-    --batch-size "$BATCH_SIZE" \
+    "${telemetrygen_batch_flags[@]}" \
     >/dev/null 2>&1 &
   local telemetry_pid=$!
 
@@ -439,19 +461,29 @@ run_mode() {
   COLLECTOR_PID=""
 
   local recv_start recv_end recv_delta recv_sps
+  local new_traces_start new_traces_end new_traces_delta trace_sps estimated_take_sps
   local sampled_traces_start sampled_traces_end sampled_traces_delta sampled_spans_delta sampled_sps spans_per_trace
   recv_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
   recv_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
+  new_traces_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_processor_tail_sampling_new_trace_id_received" "otelcol_processor_tail_sampling_new_trace_id_received_total")
+  new_traces_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_processor_tail_sampling_new_trace_id_received" "otelcol_processor_tail_sampling_new_trace_id_received_total")
   sampled_traces_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
   sampled_traces_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
   recv_delta=$(awk -v e="$recv_end" -v s="$recv_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
+  new_traces_delta=$(awk -v e="$new_traces_end" -v s="$new_traces_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
   sampled_traces_delta=$(awk -v e="$sampled_traces_end" -v s="$sampled_traces_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
   spans_per_trace=$((CHILD_SPANS + 1))
   sampled_spans_delta=$(awk -v t="$sampled_traces_delta" -v spt="$spans_per_trace" 'BEGIN { printf "%.0f", (t + 0) * (spt + 0) }')
   recv_sps=$(awk -v d="$recv_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
+  trace_sps=$(awk -v d="$new_traces_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
+  if [[ "$sample_on_root" == "true" ]]; then
+    estimated_take_sps=$(awk -v trace_sps="$trace_sps" -v rate="$SAMPLE_RATE" 'BEGIN { printf "%.2f", (trace_sps + 0) * (rate + 0) }')
+  else
+    estimated_take_sps="$trace_sps"
+  fi
   sampled_sps=$(awk -v d="$sampled_spans_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
 
-  MODE="$mode" RECV_DELTA="$recv_delta" RECV_SPS="$recv_sps" SAMPLED_SPANS_DELTA="$sampled_spans_delta" SAMPLED_SPS="$sampled_sps" awk -F',' '
+  MODE="$mode" STORAGE="$storage" SAMPLE_ON_ROOT="$sample_on_root" RECV_DELTA="$recv_delta" RECV_SPS="$recv_sps" TRACE_SPS="$trace_sps" EST_TAKE_SPS="$estimated_take_sps" SAMPLED_SPANS_DELTA="$sampled_spans_delta" SAMPLED_SPS="$sampled_sps" awk -F',' '
     NR==1 { next }
     {
       c++
@@ -464,12 +496,12 @@ run_mode() {
     }
     END {
       if (c == 0) {
-        printf "mode=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 cpu_avg_pct=0 cpu_peak_pct=0 cpu_final_pct=0 recv_spans=0 sampled_spans=0 recv_sps=0 sampled_sps=0\n", ENVIRON["MODE"]
+        printf "mode=%s storage=%s sample_on_root=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 cpu_avg_pct=0 cpu_peak_pct=0 cpu_final_pct=0 recv_spans=0 sampled_spans=0 recv_sps=0 trace_sps=0 estimated_take_sps=0 sampled_sps=0\n", ENVIRON["MODE"], ENVIRON["STORAGE"], ENVIRON["SAMPLE_ON_ROOT"]
         exit
       }
-      printf "mode=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f cpu_avg_pct=%.2f cpu_peak_pct=%.2f cpu_final_pct=%.2f recv_spans=%s sampled_spans=%s recv_sps=%s sampled_sps=%s\n",
-             ENVIRON["MODE"], c, max_rss/1024.0, (sum_rss/c)/1024.0, last_rss/1024.0, (sum_cpu/c), max_cpu, last_cpu,
-             ENVIRON["RECV_DELTA"], ENVIRON["SAMPLED_SPANS_DELTA"], ENVIRON["RECV_SPS"], ENVIRON["SAMPLED_SPS"]
+      printf "mode=%s storage=%s sample_on_root=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f cpu_avg_pct=%.2f cpu_peak_pct=%.2f cpu_final_pct=%.2f recv_spans=%s sampled_spans=%s recv_sps=%s trace_sps=%s estimated_take_sps=%s sampled_sps=%s\n",
+             ENVIRON["MODE"], ENVIRON["STORAGE"], ENVIRON["SAMPLE_ON_ROOT"], c, max_rss/1024.0, (sum_rss/c)/1024.0, last_rss/1024.0, (sum_cpu/c), max_cpu, last_cpu,
+             ENVIRON["RECV_DELTA"], ENVIRON["SAMPLED_SPANS_DELTA"], ENVIRON["RECV_SPS"], ENVIRON["TRACE_SPS"], ENVIRON["EST_TAKE_SPS"], ENVIRON["SAMPLED_SPS"]
     }' "$samples"
 }
 
@@ -481,26 +513,40 @@ echo "rate/worker:        $RATE spans/s"
 echo "workers:            $WORKERS"
 echo "child_spans:        $CHILD_SPANS"
 echo "load_size_mb:       $LOAD_SIZE_MB"
+echo "sample_rate:        ${SAMPLE_RATE} (probabilistic)"
+echo "split_trace_requests: $SPLIT_TRACE_REQUESTS"
 echo "sample_interval:    ${SAMPLE_INTERVAL}s"
 echo "output_dir:         $OUTPUT_DIR"
 echo
 
-INMEMORY_SUMMARY=$(run_mode "inmemory")
-PEBBLE_SUMMARY=$(run_mode "pebble")
+INMEMORY_ROOT_FALSE_SUMMARY=$(run_mode "inmemory_root_false" "inmemory" "false")
+INMEMORY_ROOT_TRUE_SUMMARY=$(run_mode "inmemory_root_true" "inmemory" "true")
+PEBBLE_ROOT_FALSE_SUMMARY=$(run_mode "pebble_root_false" "pebble" "false")
+PEBBLE_ROOT_TRUE_SUMMARY=$(run_mode "pebble_root_true" "pebble" "true")
 
 echo "=== results ==="
-echo "$INMEMORY_SUMMARY"
-echo "$PEBBLE_SUMMARY"
+echo "$INMEMORY_ROOT_FALSE_SUMMARY"
+echo "$INMEMORY_ROOT_TRUE_SUMMARY"
+echo "$PEBBLE_ROOT_FALSE_SUMMARY"
+echo "$PEBBLE_ROOT_TRUE_SUMMARY"
 echo
 echo "Raw RSS samples:"
-echo "  $OUTPUT_DIR/inmemory/rss_samples.csv"
-echo "  $OUTPUT_DIR/pebble/rss_samples.csv"
+echo "  $OUTPUT_DIR/inmemory_root_false/rss_samples.csv"
+echo "  $OUTPUT_DIR/inmemory_root_true/rss_samples.csv"
+echo "  $OUTPUT_DIR/pebble_root_false/rss_samples.csv"
+echo "  $OUTPUT_DIR/pebble_root_true/rss_samples.csv"
 echo "Collector logs:"
-echo "  $OUTPUT_DIR/inmemory/collector.log"
-echo "  $OUTPUT_DIR/pebble/collector.log"
+echo "  $OUTPUT_DIR/inmemory_root_false/collector.log"
+echo "  $OUTPUT_DIR/inmemory_root_true/collector.log"
+echo "  $OUTPUT_DIR/pebble_root_false/collector.log"
+echo "  $OUTPUT_DIR/pebble_root_true/collector.log"
 echo "Collector metrics snapshots:"
-echo "  $OUTPUT_DIR/inmemory/metrics_start.prom"
-echo "  $OUTPUT_DIR/inmemory/metrics_end.prom"
-echo "  $OUTPUT_DIR/pebble/metrics_start.prom"
-echo "  $OUTPUT_DIR/pebble/metrics_end.prom"
+echo "  $OUTPUT_DIR/inmemory_root_false/metrics_start.prom"
+echo "  $OUTPUT_DIR/inmemory_root_false/metrics_end.prom"
+echo "  $OUTPUT_DIR/inmemory_root_true/metrics_start.prom"
+echo "  $OUTPUT_DIR/inmemory_root_true/metrics_end.prom"
+echo "  $OUTPUT_DIR/pebble_root_false/metrics_start.prom"
+echo "  $OUTPUT_DIR/pebble_root_false/metrics_end.prom"
+echo "  $OUTPUT_DIR/pebble_root_true/metrics_start.prom"
+echo "  $OUTPUT_DIR/pebble_root_true/metrics_end.prom"
 
