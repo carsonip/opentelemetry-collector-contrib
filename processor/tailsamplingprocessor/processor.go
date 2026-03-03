@@ -495,7 +495,7 @@ func (tsp *tailSamplingSpanProcessor) iter(tickChan <-chan time.Time, workChan <
 				tsp.waitForSpace(tickChan)
 			}
 
-			tsp.processTrace(trace.id, trace.rss, trace.spanCount, trace.rootSpan != nil)
+			tsp.processTrace(trace.id, trace.rss, trace.spanCount, trace.rootSpan)
 		}
 	case cmd := <-tsp.newPolicyChan:
 		tsp.policies = cmd.policies
@@ -751,8 +751,9 @@ func groupSpansByTraceKey(resourceSpans ptrace.ResourceSpans) map[pcommon.TraceI
 	return idToSpans
 }
 
-func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrace.ResourceSpans, spanCount int64, containsRootSpan bool) {
+func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrace.ResourceSpans, spanCount int64, rootSpan *ptrace.Span) {
 	currTime := time.Now()
+	containsRootSpan := rootSpan != nil
 
 	var newTraceIDs int64
 	defer func() {
@@ -770,7 +771,9 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 		tsp.idToTrace[id] = actualData
 
 		newTraceIDs++
-		actualData.batchID = tsp.decisionBatcher.AddToCurrentBatch(id)
+		if !tsp.cfg.SampleOnRootSpanOnly {
+			actualData.batchID = tsp.decisionBatcher.AddToCurrentBatch(id)
+		}
 
 		if !tsp.blockOnOverflow {
 			actualData.deleteElement = tsp.deleteTraceQueue.PushBack(id)
@@ -778,8 +781,8 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 	} else {
 		actualData.spanCount += spanCount
 	}
-	if containsRootSpan && tsp.cfg.DecisionWaitAfterRootReceived > 0 {
-		tsp.decisionBatcher.MoveToEarlierBatch(id, actualData.batchID, uint64(tsp.cfg.DecisionWaitAfterRootReceived.Seconds()))
+	if containsRootSpan && !tsp.cfg.SampleOnRootSpanOnly && tsp.cfg.DecisionWaitAfterRootReceived > 0 {
+		actualData.batchID = tsp.decisionBatcher.MoveToEarlierBatch(id, actualData.batchID, uint64(tsp.cfg.DecisionWaitAfterRootReceived.Seconds()))
 	}
 
 	finalDecision := actualData.finalDecision
@@ -793,7 +796,9 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 		tsp.telemetry.ProcessorTailSamplingTracesDroppedTooLarge.Add(tsp.ctx, 1)
 		actualData.finalDecision = samplingpolicy.NotSampled
 		// Since we are not in a normal decision flow when dropping large traces, also be sure to remove it from the batcher.
-		tsp.decisionBatcher.RemoveFromBatch(id, actualData.batchID)
+		if !tsp.cfg.SampleOnRootSpanOnly {
+			tsp.decisionBatcher.RemoveFromBatch(id, actualData.batchID)
+		}
 		tsp.releaseNotSampledTrace(id, "")
 		return
 	}
@@ -802,6 +807,27 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 		// If the final decision hasn't been made, add the new spans to the
 		// existing trace.
 		tsp.tailStorage.Append(id, rss)
+
+		// In root-only mode, evaluate as soon as the root span is seen and only
+		// use root span data for the sampling decision.
+		if tsp.cfg.SampleOnRootSpanOnly && containsRootSpan {
+			actualData.decisionTime = time.Now()
+			rootOnlyTraceData := traceDataWithRootSpanOnly(rss, *rootSpan)
+			decision, policyName := tsp.makeDecision(id, &rootOnlyTraceData, newPolicyTickMetrics(len(tsp.policies)))
+			actualData.finalDecision = decision
+			actualData.policyName = policyName
+
+			if decision == samplingpolicy.Sampled {
+				allSpans, ok := tsp.tailStorage.Take(id)
+				if !ok {
+					tsp.logger.Debug("Trace ID not found in tail storage during root-only sampling release", zap.Stringer("id", id))
+					allSpans = ptrace.NewTraces()
+				}
+				tsp.releaseSampledTrace(tsp.ctx, id, allSpans, policyName)
+			} else {
+				tsp.releaseNotSampledTrace(id, policyName)
+			}
+		}
 		return
 	}
 
@@ -819,6 +845,37 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 	if !actualData.decisionTime.IsZero() {
 		tsp.telemetry.ProcessorTailSamplingSamplingLateSpanAge.Record(tsp.ctx, int64(time.Since(actualData.decisionTime)/time.Second))
 	}
+}
+
+func traceDataWithRootSpanOnly(rss ptrace.ResourceSpans, rootSpan ptrace.Span) samplingpolicy.TraceData {
+	traceData := samplingpolicy.TraceData{
+		SpanCount:       1,
+		ReceivedBatches: ptrace.NewTraces(),
+	}
+
+	rs := traceData.ReceivedBatches.ResourceSpans().AppendEmpty()
+	rss.Resource().CopyTo(rs.Resource())
+
+	scopeSpans := rss.ScopeSpans()
+	for i := 0; i < scopeSpans.Len(); i++ {
+		srcScopeSpans := scopeSpans.At(i)
+		srcSpans := srcScopeSpans.Spans()
+		for j := 0; j < srcSpans.Len(); j++ {
+			srcSpan := srcSpans.At(j)
+			if srcSpan.SpanID() != rootSpan.SpanID() {
+				continue
+			}
+			dstScopeSpans := rs.ScopeSpans().AppendEmpty()
+			srcScopeSpans.Scope().CopyTo(dstScopeSpans.Scope())
+			srcSpan.CopyTo(dstScopeSpans.Spans().AppendEmpty())
+			return traceData
+		}
+	}
+
+	// Fallback in case the root span cannot be located in rss.
+	fallbackScopeSpans := rs.ScopeSpans().AppendEmpty()
+	rootSpan.CopyTo(fallbackScopeSpans.Spans().AppendEmpty())
+	return traceData
 }
 
 func extensions(host component.Host) map[string]samplingpolicy.Extension {
