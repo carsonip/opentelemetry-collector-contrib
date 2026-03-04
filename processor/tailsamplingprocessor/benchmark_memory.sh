@@ -13,7 +13,7 @@ Runs a 2x2 scenario matrix:
   - storage backend: in-memory vs tail_storage_pebble extension
   - sample_on_root_span_only: false vs true
 
-Sampling policy is fixed to probabilistic 0.01 (1%).
+Sampling policy is fixed to probabilistic 1%.
 
 The telemetry generation duration is always clamped to at least:
   2 * decision_wait
@@ -53,7 +53,8 @@ CHILD_SPANS="2"
 LOAD_SIZE_MB="0"
 BATCH_SIZE="200"
 SPLIT_TRACE_REQUESTS="true"
-SAMPLE_RATE="0.01"
+# Probabilistic sampling percentage (0-100).
+SAMPLE_PCT="1"
 NUM_TRACES="500000"
 SAMPLE_INTERVAL="0.5"
 OTLP_PORT="4317"
@@ -258,6 +259,30 @@ extract_metric_any_name() {
   echo "0"
 }
 
+extract_log_numeric_field() {
+  local file="$1"
+  local field="$2"
+  awk -v field="$field" '
+    index($0, "Tail storage operations summary") > 0 {
+      line = $0
+    }
+    END {
+      if (line == "") {
+        print "0"
+        exit
+      }
+      tmp = line
+      # Handles both key=value and "key":value style log output.
+      sub(".*" field "[^0-9]*", "", tmp)
+      sub("[^0-9].*", "", tmp)
+      if (tmp == "") {
+        print "0"
+        exit
+      }
+      print tmp
+    }' "$file"
+}
+
 make_config() {
   local storage="$1"
   local sample_on_root="$2"
@@ -281,7 +306,7 @@ processors:
       - name: probabilistic_1pct
         type: probabilistic
         probabilistic:
-          sampling_percentage: ${SAMPLE_RATE}
+          sampling_percentage: ${SAMPLE_PCT}
 
 exporters:
   nop:
@@ -326,7 +351,7 @@ processors:
       - name: probabilistic_1pct
         type: probabilistic
         probabilistic:
-          sampling_percentage: ${SAMPLE_RATE}
+          sampling_percentage: ${SAMPLE_PCT}
 
 exporters:
   nop:
@@ -463,6 +488,7 @@ run_mode() {
   local recv_start recv_end recv_delta recv_sps
   local new_traces_start new_traces_end new_traces_delta trace_sps estimated_take_sps
   local sampled_traces_start sampled_traces_end sampled_traces_delta sampled_spans_delta sampled_sps spans_per_trace
+  local append_calls take_calls append_sps actual_take_sps
   recv_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
   recv_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
   new_traces_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_processor_tail_sampling_new_trace_id_received" "otelcol_processor_tail_sampling_new_trace_id_received_total")
@@ -477,13 +503,17 @@ run_mode() {
   recv_sps=$(awk -v d="$recv_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
   trace_sps=$(awk -v d="$new_traces_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
   if [[ "$sample_on_root" == "true" ]]; then
-    estimated_take_sps=$(awk -v trace_sps="$trace_sps" -v rate="$SAMPLE_RATE" 'BEGIN { printf "%.2f", (trace_sps + 0) * (rate + 0) }')
+    estimated_take_sps=$(awk -v trace_sps="$trace_sps" -v pct="$SAMPLE_PCT" 'BEGIN { printf "%.2f", (trace_sps + 0) * ((pct + 0) / 100.0) }')
   else
     estimated_take_sps="$trace_sps"
   fi
   sampled_sps=$(awk -v d="$sampled_spans_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
+  append_calls=$(extract_log_numeric_field "$log" "append_calls")
+  take_calls=$(extract_log_numeric_field "$log" "take_calls")
+  append_sps=$(awk -v d="$append_calls" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
+  actual_take_sps=$(awk -v d="$take_calls" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
 
-  MODE="$mode" STORAGE="$storage" SAMPLE_ON_ROOT="$sample_on_root" RECV_DELTA="$recv_delta" RECV_SPS="$recv_sps" TRACE_SPS="$trace_sps" EST_TAKE_SPS="$estimated_take_sps" SAMPLED_SPANS_DELTA="$sampled_spans_delta" SAMPLED_SPS="$sampled_sps" awk -F',' '
+  MODE="$mode" STORAGE="$storage" SAMPLE_ON_ROOT="$sample_on_root" RECV_DELTA="$recv_delta" RECV_SPS="$recv_sps" TRACE_SPS="$trace_sps" EST_TAKE_SPS="$estimated_take_sps" SAMPLED_SPANS_DELTA="$sampled_spans_delta" SAMPLED_SPS="$sampled_sps" APPEND_CALLS="$append_calls" TAKE_CALLS="$take_calls" APPEND_SPS="$append_sps" ACTUAL_TAKE_SPS="$actual_take_sps" awk -F',' '
     NR==1 { next }
     {
       c++
@@ -496,12 +526,12 @@ run_mode() {
     }
     END {
       if (c == 0) {
-        printf "mode=%s storage=%s sample_on_root=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 cpu_avg_pct=0 cpu_peak_pct=0 cpu_final_pct=0 recv_spans=0 sampled_spans=0 recv_sps=0 trace_sps=0 estimated_take_sps=0 sampled_sps=0\n", ENVIRON["MODE"], ENVIRON["STORAGE"], ENVIRON["SAMPLE_ON_ROOT"]
+        printf "mode=%s storage=%s sample_on_root=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 cpu_avg_pct=0 cpu_peak_pct=0 cpu_final_pct=0 recv_spans=0 sampled_spans=0 recv_sps=0 trace_sps=0 estimated_take_sps=0 append_calls=0 take_calls=0 append_sps=0 actual_take_sps=0 sampled_sps=0\n", ENVIRON["MODE"], ENVIRON["STORAGE"], ENVIRON["SAMPLE_ON_ROOT"]
         exit
       }
-      printf "mode=%s storage=%s sample_on_root=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f cpu_avg_pct=%.2f cpu_peak_pct=%.2f cpu_final_pct=%.2f recv_spans=%s sampled_spans=%s recv_sps=%s trace_sps=%s estimated_take_sps=%s sampled_sps=%s\n",
+      printf "mode=%s storage=%s sample_on_root=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f cpu_avg_pct=%.2f cpu_peak_pct=%.2f cpu_final_pct=%.2f recv_spans=%s sampled_spans=%s recv_sps=%s trace_sps=%s estimated_take_sps=%s append_calls=%s take_calls=%s append_sps=%s actual_take_sps=%s sampled_sps=%s\n",
              ENVIRON["MODE"], ENVIRON["STORAGE"], ENVIRON["SAMPLE_ON_ROOT"], c, max_rss/1024.0, (sum_rss/c)/1024.0, last_rss/1024.0, (sum_cpu/c), max_cpu, last_cpu,
-             ENVIRON["RECV_DELTA"], ENVIRON["SAMPLED_SPANS_DELTA"], ENVIRON["RECV_SPS"], ENVIRON["TRACE_SPS"], ENVIRON["EST_TAKE_SPS"], ENVIRON["SAMPLED_SPS"]
+             ENVIRON["RECV_DELTA"], ENVIRON["SAMPLED_SPANS_DELTA"], ENVIRON["RECV_SPS"], ENVIRON["TRACE_SPS"], ENVIRON["EST_TAKE_SPS"], ENVIRON["APPEND_CALLS"], ENVIRON["TAKE_CALLS"], ENVIRON["APPEND_SPS"], ENVIRON["ACTUAL_TAKE_SPS"], ENVIRON["SAMPLED_SPS"]
     }' "$samples"
 }
 
@@ -513,7 +543,7 @@ echo "rate/worker:        $RATE spans/s"
 echo "workers:            $WORKERS"
 echo "child_spans:        $CHILD_SPANS"
 echo "load_size_mb:       $LOAD_SIZE_MB"
-echo "sample_rate:        ${SAMPLE_RATE} (probabilistic)"
+echo "sample_pct:         ${SAMPLE_PCT} (probabilistic)"
 echo "split_trace_requests: $SPLIT_TRACE_REQUESTS"
 echo "sample_interval:    ${SAMPLE_INTERVAL}s"
 echo "output_dir:         $OUTPUT_DIR"

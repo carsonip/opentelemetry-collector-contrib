@@ -63,19 +63,21 @@ type tailSamplingSpanProcessor struct {
 	telemetry *metadata.TelemetryBuilder
 	logger    *zap.Logger
 
-	deleteTraceQueue   *list.List
-	nextConsumer       consumer.Traces
-	policies           []*policy
-	idToTrace          map[pcommon.TraceID]*traceData
-	tailStorage        tailstorageextension.TailStorage
-	tickerFrequency    time.Duration
-	decisionBatcher    idbatcher.Batcher
-	sampledIDCache     cache.Cache
-	nonSampledIDCache  cache.Cache
-	recordPolicy       bool
-	sampleOnFirstMatch bool
-	blockOnOverflow    bool
-	maxTraceSizeBytes  uint64
+	deleteTraceQueue       *list.List
+	nextConsumer           consumer.Traces
+	policies               []*policy
+	idToTrace              map[pcommon.TraceID]*traceData
+	tailStorage            tailstorageextension.TailStorage
+	tickerFrequency        time.Duration
+	decisionBatcher        idbatcher.Batcher
+	sampledIDCache         cache.Cache
+	nonSampledIDCache      cache.Cache
+	recordPolicy           bool
+	sampleOnFirstMatch     bool
+	blockOnOverflow        bool
+	maxTraceSizeBytes      uint64
+	tailStorageAppendCalls uint64
+	tailStorageTakeCalls   uint64
 
 	cfg  Config
 	host component.Host
@@ -593,7 +595,7 @@ func (tsp *tailSamplingSpanProcessor) samplingPolicyOnTick() bool {
 			continue
 		}
 
-		allSpans, ok := tsp.tailStorage.Take(id)
+		allSpans, ok := tsp.takeTraceFromStorage(id)
 		if !ok {
 			metrics.idNotFoundOnMapCount++
 			continue
@@ -814,7 +816,7 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 			actualData.policyName = policyName
 
 			if decision == samplingpolicy.Sampled {
-				allSpans, ok := tsp.tailStorage.Take(id)
+				allSpans, ok := tsp.takeTraceFromStorage(id)
 				if !ok {
 					allSpans = ptrace.NewTraces()
 				}
@@ -830,7 +832,7 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 
 		// If the final decision hasn't been made yet, add the new spans to the
 		// existing trace.
-		tsp.tailStorage.Append(id, rss)
+		tsp.appendTraceToStorage(id, rss)
 		return
 	}
 
@@ -921,6 +923,10 @@ func (tsp *tailSamplingSpanProcessor) Shutdown(context.Context) error {
 	if tsp.doneChan != nil {
 		<-tsp.doneChan
 	}
+	tsp.logger.Info("Tail storage operations summary",
+		zap.Uint64("append_calls", tsp.tailStorageAppendCalls),
+		zap.Uint64("take_calls", tsp.tailStorageTakeCalls),
+	)
 	return nil
 }
 
@@ -984,6 +990,16 @@ func getPolicyName(policy *policy) string {
 func appendToTraces(dest ptrace.Traces, rss ptrace.ResourceSpans) {
 	rs := dest.ResourceSpans().AppendEmpty()
 	rss.MoveTo(rs)
+}
+
+func (tsp *tailSamplingSpanProcessor) appendTraceToStorage(id pcommon.TraceID, rss ptrace.ResourceSpans) {
+	tsp.tailStorage.Append(id, rss)
+	tsp.tailStorageAppendCalls++
+}
+
+func (tsp *tailSamplingSpanProcessor) takeTraceFromStorage(id pcommon.TraceID) (ptrace.Traces, bool) {
+	tsp.tailStorageTakeCalls++
+	return tsp.tailStorage.Take(id)
 }
 
 func newResourceSpanFromSpanAndScopes(rss ptrace.ResourceSpans, spanAndScopes []spanAndScope) (ptrace.ResourceSpans, *ptrace.Span) {

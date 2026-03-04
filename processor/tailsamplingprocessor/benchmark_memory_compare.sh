@@ -109,14 +109,14 @@ rate_worker=$(extract_value_after_colon 'rate/worker:')
 workers=$(extract_value_after_colon 'workers:')
 child_spans=$(extract_value_after_colon 'child_spans:')
 load_size_mb=$(extract_value_after_colon 'load_size_mb:')
-sample_rate=$(extract_value_after_colon 'sample_rate:')
+sample_pct=$(extract_value_after_colon 'sample_pct:')
 split_trace_requests=$(extract_value_after_colon 'split_trace_requests:')
 output_dir=$(extract_value_after_colon 'output_dir:')
 
 print_mode_row() {
   local label="$1"
   local line="$2"
-  local samples peak avg final cpu_avg cpu_peak recv_sps trace_sps est_take_sps sampled_sps
+  local samples peak avg final cpu_avg cpu_peak recv_sps trace_sps est_take_sps append_sps actual_take_sps sampled_sps
   samples=$(extract_field "$line" "samples")
   peak=$(extract_field "$line" "peak_mb")
   avg=$(extract_field "$line" "avg_mb")
@@ -126,16 +126,18 @@ print_mode_row() {
   recv_sps=$(extract_field "$line" "recv_sps")
   trace_sps=$(extract_field "$line" "trace_sps")
   est_take_sps=$(extract_field "$line" "estimated_take_sps")
+  append_sps=$(extract_field "$line" "append_sps")
+  actual_take_sps=$(extract_field "$line" "actual_take_sps")
   sampled_sps=$(extract_field "$line" "sampled_sps")
-  printf "%-22s %8s %9s %9s %9s %8s %8s %9s %9s %9s %10s\n" "$label" "$samples" "$peak" "$avg" "$final" "$cpu_avg" "$cpu_peak" "$recv_sps" "$trace_sps" "$est_take_sps" "$sampled_sps"
+  printf "%-22s %8s %9s %9s %9s %8s %8s %9s %9s %9s %9s %9s %10s\n" "$label" "$samples" "$peak" "$avg" "$final" "$cpu_avg" "$cpu_peak" "$recv_sps" "$trace_sps" "$est_take_sps" "$append_sps" "$actual_take_sps" "$sampled_sps"
 }
 
 print_delta_block() {
   local title="$1"
   local line_a="$2"
   local line_b="$3"
-  local a_peak a_avg a_final a_cpu_avg a_cpu_peak a_recv a_trace a_take a_sampled
-  local b_peak b_avg b_final b_cpu_avg b_cpu_peak b_recv b_trace b_take b_sampled
+  local a_peak a_avg a_final a_cpu_avg a_cpu_peak a_recv a_trace a_take a_append a_actual_take a_sampled
+  local b_peak b_avg b_final b_cpu_avg b_cpu_peak b_recv b_trace b_take b_append b_actual_take b_sampled
   a_peak=$(extract_field "$line_a" "peak_mb")
   a_avg=$(extract_field "$line_a" "avg_mb")
   a_final=$(extract_field "$line_a" "final_mb")
@@ -144,6 +146,8 @@ print_delta_block() {
   a_recv=$(extract_field "$line_a" "recv_sps")
   a_trace=$(extract_field "$line_a" "trace_sps")
   a_take=$(extract_field "$line_a" "estimated_take_sps")
+  a_append=$(extract_field "$line_a" "append_sps")
+  a_actual_take=$(extract_field "$line_a" "actual_take_sps")
   a_sampled=$(extract_field "$line_a" "sampled_sps")
   b_peak=$(extract_field "$line_b" "peak_mb")
   b_avg=$(extract_field "$line_b" "avg_mb")
@@ -153,6 +157,8 @@ print_delta_block() {
   b_recv=$(extract_field "$line_b" "recv_sps")
   b_trace=$(extract_field "$line_b" "trace_sps")
   b_take=$(extract_field "$line_b" "estimated_take_sps")
+  b_append=$(extract_field "$line_b" "append_sps")
+  b_actual_take=$(extract_field "$line_b" "actual_take_sps")
   b_sampled=$(extract_field "$line_b" "sampled_sps")
 
   echo
@@ -160,10 +166,10 @@ print_delta_block() {
   awk \
     -v a_peak="$a_peak" -v a_avg="$a_avg" -v a_final="$a_final" \
     -v a_cpu_avg="$a_cpu_avg" -v a_cpu_peak="$a_cpu_peak" \
-    -v a_recv="$a_recv" -v a_trace="$a_trace" -v a_take="$a_take" -v a_sampled="$a_sampled" \
+    -v a_recv="$a_recv" -v a_trace="$a_trace" -v a_take="$a_take" -v a_append="$a_append" -v a_actual_take="$a_actual_take" -v a_sampled="$a_sampled" \
     -v b_peak="$b_peak" -v b_avg="$b_avg" -v b_final="$b_final" \
     -v b_cpu_avg="$b_cpu_avg" -v b_cpu_peak="$b_cpu_peak" \
-    -v b_recv="$b_recv" -v b_trace="$b_trace" -v b_take="$b_take" -v b_sampled="$b_sampled" '
+    -v b_recv="$b_recv" -v b_trace="$b_trace" -v b_take="$b_take" -v b_append="$b_append" -v b_actual_take="$b_actual_take" -v b_sampled="$b_sampled" '
     function line(name, d, base) {
       pct = (base == 0 ? 0 : (d / base) * 100.0)
       ratio = (base == 0 ? 0 : (d + base) / base)
@@ -178,14 +184,16 @@ print_delta_block() {
       line("recv throughput delta:", b_recv - a_recv, a_recv)
       line("trace throughput delta:", b_trace - a_trace, a_trace)
       line("estimated take/s delta:", b_take - a_take, a_take)
+      line("append/s delta:", b_append - a_append, a_append)
+      line("actual take/s delta:", b_actual_take - a_actual_take, a_actual_take)
       line("sampled throughput delta:", b_sampled - a_sampled, a_sampled)
     }'
 }
 
 echo "=== tail sampling memory comparison ==="
-echo "settings: decision_wait=${decision_wait}, effective_duration=${effective_duration}, rate/worker=${rate_worker}, workers=${workers}, child_spans=${child_spans}, load_size_mb=${load_size_mb}, sample_rate=${sample_rate}, split_trace_requests=${split_trace_requests}"
+echo "settings: decision_wait=${decision_wait}, effective_duration=${effective_duration}, rate/worker=${rate_worker}, workers=${workers}, child_spans=${child_spans}, load_size_mb=${load_size_mb}, sample_pct=${sample_pct}, split_trace_requests=${split_trace_requests}"
 echo
-printf "%-22s %8s %9s %9s %9s %8s %8s %9s %9s %9s %10s\n" "mode" "samples" "peak_mb" "avg_mb" "final_mb" "cpu_avg" "cpu_peak" "recv_sps" "trace_sps" "take_sps" "sampled_sps"
+printf "%-22s %8s %9s %9s %9s %8s %8s %9s %9s %9s %9s %9s %10s\n" "mode" "samples" "peak_mb" "avg_mb" "final_mb" "cpu_avg" "cpu_peak" "recv_sps" "trace_sps" "est_take" "append_sps" "take_sps" "sampled_sps"
 print_mode_row "inmemory_root_false" "$inmemory_root_false_line"
 print_mode_row "inmemory_root_true" "$inmemory_root_true_line"
 print_mode_row "pebble_root_false" "$pebble_root_false_line"
