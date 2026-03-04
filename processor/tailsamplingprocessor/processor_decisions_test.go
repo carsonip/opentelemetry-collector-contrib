@@ -929,6 +929,68 @@ func TestSampleOnRootSpanOnly(t *testing.T) {
 	require.Equal(t, 1, mpe.EvaluationCount)
 }
 
+func TestSampleOnRootSpanOnlySkipsRootAppendToTailStorage(t *testing.T) {
+	nextConsumer := new(consumertest.TracesSink)
+	controller := newTestTSPController()
+	host := &extensionHost{}
+
+	mpe := &mockPolicyEvaluator{}
+	policies := []*policy{
+		{name: "mock-policy-1", evaluator: mpe, attribute: metric.WithAttributes(attribute.String("policy", "mock-policy-1"))},
+	}
+
+	cfg := Config{
+		DecisionWait:         defaultTestDecisionWait,
+		NumTraces:            defaultNumTraces,
+		SampleOnRootSpanOnly: true,
+		TailStorageID:        &testExtensionID,
+		Options: []Option{
+			withTestController(controller),
+			withPolicies(policies),
+		},
+	}
+	p, err := newTracesProcessor(t.Context(), processortest.NewNopSettings(metadata.Type), nextConsumer, cfg)
+	require.NoError(t, err)
+
+	require.NoError(t, p.Start(t.Context(), host))
+	defer func(p processor.Traces) {
+		require.NoError(t, p.Shutdown(t.Context()))
+	}(p)
+
+	traceID := uInt64ToTraceID(7)
+	rootSpanID := uInt64ToSpanID(1)
+
+	spanToTraces := func(spanID pcommon.SpanID, parentID pcommon.SpanID) ptrace.Traces {
+		traces := ptrace.NewTraces()
+		span := traces.ResourceSpans().AppendEmpty().ScopeSpans().AppendEmpty().Spans().AppendEmpty()
+		span.SetTraceID(traceID)
+		span.SetSpanID(spanID)
+		if !parentID.IsEmpty() {
+			span.SetParentSpanID(parentID)
+		}
+		return traces
+	}
+
+	mpe.NextDecision = samplingpolicy.Sampled
+
+	// Child first should be buffered in storage.
+	require.NoError(t, p.ConsumeTraces(t.Context(), spanToTraces(uInt64ToSpanID(2), rootSpanID)))
+	ext := host.extension
+	require.NotNil(t, ext)
+	require.Eventually(t, func() bool {
+		return ext.appendCount == 1
+	}, time.Second, 10*time.Millisecond)
+
+	// Root span triggers immediate decision; root batch should not be appended.
+	require.NoError(t, p.ConsumeTraces(t.Context(), spanToTraces(rootSpanID, pcommon.SpanID{})))
+	require.Eventually(t, func() bool {
+		return nextConsumer.SpanCount() == 2 && mpe.EvaluationCount == 1
+	}, time.Second, 10*time.Millisecond)
+
+	require.Equal(t, 1, ext.appendCount, "root-triggering batch should not be appended to storage")
+	require.Equal(t, 1, ext.takeCount, "sampled root-triggered decision should fetch buffered spans once")
+}
+
 func TestRateLimiter(t *testing.T) {
 	nextConsumer := new(consumertest.TracesSink)
 	controller := newTestTSPController()
