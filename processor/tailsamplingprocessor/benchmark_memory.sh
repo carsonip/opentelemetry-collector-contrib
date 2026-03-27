@@ -24,7 +24,7 @@ Options:
   --sampling-strategy <value>   tail_sampling.sampling_strategy (default: trace-complete)
   --policy <value>              tail_sampling policy: always_sample|probabilistic (default: always_sample)
   --sampling-percentage <float> probabilistic sampling percentage (default: 1)
-  --duration <duration>         Requested load duration (default: 20s)
+  --duration <duration>         Requested load duration (default: 2 * decision_wait)
   --rate <float>                Traces per second per worker (default: 2000)
   --workers <int>               telemetrygen workers (default: 4)
   --child-spans <int>           Child spans per trace (default: 2)
@@ -49,7 +49,7 @@ DECISION_WAIT="5s"
 SAMPLING_STRATEGY="trace-complete"
 POLICY="always_sample"
 SAMPLING_PERCENTAGE="1"
-REQUESTED_DURATION="20s"
+REQUESTED_DURATION=""
 RATE="2000"
 WORKERS="4"
 CHILD_SPANS="2"
@@ -144,9 +144,14 @@ to_go_seconds() {
 }
 
 DW_SEC=$(duration_to_seconds "$DECISION_WAIT")
-REQ_SEC=$(duration_to_seconds "$REQUESTED_DURATION")
 MIN_SEC=$(mul_float "$DW_SEC" "2")
-LOAD_SEC=$(max_float "$REQ_SEC" "$MIN_SEC")
+if [[ -n "$REQUESTED_DURATION" ]]; then
+  REQ_SEC=$(duration_to_seconds "$REQUESTED_DURATION")
+  LOAD_SEC="$REQ_SEC"
+else
+  LOAD_SEC="$MIN_SEC"
+  REQUESTED_DURATION=$(to_go_seconds "$MIN_SEC")
+fi
 LOAD_DURATION=$(to_go_seconds "$LOAD_SEC")
 POST_WAIT_SEC=$(max_float "$DW_SEC" "1")
 
@@ -543,7 +548,7 @@ if [[ "$POLICY" == "probabilistic" ]]; then
   echo "sampling_percentage:${SAMPLING_PERCENTAGE}"
 fi
 echo "requested_duration: $REQUESTED_DURATION"
-echo "effective_duration: $LOAD_DURATION (>= 2 * decision_wait)"
+echo "effective_duration: $LOAD_DURATION"
 echo "rate/worker:        $RATE spans/s"
 echo "workers:            $WORKERS"
 echo "child_spans:        $CHILD_SPANS"

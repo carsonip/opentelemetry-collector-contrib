@@ -904,14 +904,19 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 			decision, policyName := tsp.makeDecisionOnSpanIngest(id, &spanIngestTraceData, metrics)
 			tsp.recordImmediateDecisionMetrics(decision, metrics, time.Since(evaluationStart))
 
-			// Store current batch after evaluation to avoid re-evaluating prior spans
-			// while still releasing full accumulated trace data on terminal outcomes.
-			appendToTraces(actualData.ReceivedBatches, spanIngestTraceData.ReceivedBatches.ResourceSpans().At(0))
+			// Persist current batch for pending traces in tail storage so disk-backed
+			// implementations can offload span payloads in span-ingest mode too.
+			tsp.tailStorage.Append(id, spanIngestTraceData.ReceivedBatches.ResourceSpans().At(0))
 
 			if decision == samplingpolicy.Sampled || decision == samplingpolicy.Dropped {
 				actualData.FinalDecision = decision
 				actualData.PolicyName = policyName
 				if decision == samplingpolicy.Sampled {
+					// Release all accumulated spans (including prior pending batches)
+					// from tail storage when a terminal sampled decision is reached.
+					if allSpans, ok := tsp.tailStorage.Take(id); ok {
+						actualData.ReceivedBatches = allSpans
+					}
 					tsp.releaseSampledTrace(tsp.ctx, id, actualData)
 				} else {
 					tsp.releaseNotSampledTrace(id, actualData)
