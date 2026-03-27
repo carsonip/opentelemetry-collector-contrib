@@ -21,6 +21,9 @@ Usage:
 
 Options:
   --decision-wait <duration>    Tail sampling decision_wait (default: 5s)
+  --sampling-strategy <value>   tail_sampling.sampling_strategy (default: trace-complete)
+  --policy <value>              tail_sampling policy: always_sample|probabilistic (default: always_sample)
+  --sampling-percentage <float> probabilistic sampling percentage (default: 1)
   --duration <duration>         Requested load duration (default: 20s)
   --rate <float>                Traces per second per worker (default: 2000)
   --workers <int>               telemetrygen workers (default: 4)
@@ -43,6 +46,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
 
 DECISION_WAIT="5s"
+SAMPLING_STRATEGY="trace-complete"
+POLICY="always_sample"
+SAMPLING_PERCENTAGE="1"
 REQUESTED_DURATION="20s"
 RATE="2000"
 WORKERS="4"
@@ -61,6 +67,9 @@ KEEP_ARTIFACTS="false"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --decision-wait) DECISION_WAIT="$2"; shift 2 ;;
+    --sampling-strategy) SAMPLING_STRATEGY="$2"; shift 2 ;;
+    --policy) POLICY="$2"; shift 2 ;;
+    --sampling-percentage) SAMPLING_PERCENTAGE="$2"; shift 2 ;;
     --duration) REQUESTED_DURATION="$2"; shift 2 ;;
     --rate) RATE="$2"; shift 2 ;;
     --workers) WORKERS="$2"; shift 2 ;;
@@ -79,6 +88,11 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown option: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+if [[ "$POLICY" != "always_sample" && "$POLICY" != "probabilistic" ]]; then
+  echo "invalid --policy: $POLICY (expected always_sample or probabilistic)" >&2
+  exit 1
+fi
 
 duration_to_seconds() {
   local d="$1"
@@ -237,6 +251,21 @@ sum_prom_metric_from_file() {
     }' "$file"
 }
 
+sum_prom_metric_with_label_from_file() {
+  local file="$1"
+  local metric="$2"
+  local label_filter="$3"
+  awk -v metric="$metric" -v label_filter="$label_filter" '
+    $0 ~ "^" metric "([ {]|$)" && index($0, label_filter) > 0 { sum += $NF; found = 1 }
+    END {
+      if (found) {
+        printf "%.0f\n", sum + 0
+      } else {
+        print ""
+      }
+    }' "$file"
+}
+
 extract_metric_any_name() {
   local file="$1"
   shift
@@ -252,11 +281,46 @@ extract_metric_any_name() {
   echo "0"
 }
 
+extract_metric_any_name_with_label() {
+  local file="$1"
+  local label_filter="$2"
+  shift 2
+  local metric
+  for metric in "$@"; do
+    local v
+    v=$(sum_prom_metric_with_label_from_file "$file" "$metric" "$label_filter")
+    if [[ -n "$v" ]]; then
+      echo "$v"
+      return 0
+    fi
+  done
+  echo "0"
+}
+
 make_config() {
   local mode="$1"
   local cfg="$2"
   local pebble_dir="$3"
   local metrics_port="$4"
+  local policy_block
+  if [[ "$POLICY" == "probabilistic" ]]; then
+    policy_block=$(cat <<EOF
+    policies:
+      - name: probabilistic
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${SAMPLING_PERCENTAGE}
+EOF
+)
+  else
+    policy_block=$(cat <<'EOF'
+    policies:
+      - name: always
+        type: always_sample
+EOF
+)
+  fi
+
   if [[ "$mode" == "inmemory" ]]; then
     cat >"$cfg" <<EOF
 receivers:
@@ -268,10 +332,9 @@ receivers:
 processors:
   tail_sampling:
     decision_wait: ${DECISION_WAIT}
+    sampling_strategy: ${SAMPLING_STRATEGY}
     num_traces: ${NUM_TRACES}
-    policies:
-      - name: always
-        type: always_sample
+${policy_block}
 
 exporters:
   nop:
@@ -309,11 +372,10 @@ receivers:
 processors:
   tail_sampling:
     decision_wait: ${DECISION_WAIT}
+    sampling_strategy: ${SAMPLING_STRATEGY}
     num_traces: ${NUM_TRACES}
     tail_storage: tail_storage_pebble/local
-    policies:
-      - name: always
-        type: always_sample
+${policy_block}
 
 exporters:
   nop:
@@ -442,8 +504,8 @@ run_mode() {
   local sampled_traces_start sampled_traces_end sampled_traces_delta sampled_spans_delta sampled_sps spans_per_trace
   recv_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
   recv_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
-  sampled_traces_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
-  sampled_traces_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
+  sampled_traces_start=$(extract_metric_any_name_with_label "$metrics_start_file" 'sampled="true"' "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
+  sampled_traces_end=$(extract_metric_any_name_with_label "$metrics_end_file" 'sampled="true"' "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
   recv_delta=$(awk -v e="$recv_end" -v s="$recv_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
   sampled_traces_delta=$(awk -v e="$sampled_traces_end" -v s="$sampled_traces_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
   spans_per_trace=$((CHILD_SPANS + 1))
@@ -475,6 +537,11 @@ run_mode() {
 
 echo "=== tail sampling memory benchmark ==="
 echo "decision_wait:      $DECISION_WAIT"
+echo "sampling_strategy:  $SAMPLING_STRATEGY"
+echo "policy:             $POLICY"
+if [[ "$POLICY" == "probabilistic" ]]; then
+  echo "sampling_percentage:${SAMPLING_PERCENTAGE}"
+fi
 echo "requested_duration: $REQUESTED_DURATION"
 echo "effective_duration: $LOAD_DURATION (>= 2 * decision_wait)"
 echo "rate/worker:        $RATE spans/s"
