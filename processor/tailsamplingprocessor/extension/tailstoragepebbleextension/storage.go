@@ -32,7 +32,7 @@ func newPebbleTailStorage(storageDir string, logger *zap.Logger) (*pebbleTailSto
 	defer cache.Unref()
 
 	opts := &pebble.Options{
-		FormatMajorVersion: pebble.FormatColumnarBlocks,
+		FormatMajorVersion: pebble.FormatValueSeparation,
 		Logger:             logger.Sugar(),
 		MemTableSize:       16 << 20,
 		Comparer:           traceKeyComparer(),
