@@ -72,6 +72,18 @@ func BenchmarkCollectorOTLPReceiverStorageBackends(b *testing.B) {
 			require2xDecisionWait: true,
 		},
 		{
+			name:                "dw1d_noRateLimit",
+			tracesPerBatch:      30,
+			spansPerTrace:       7,
+			payloadBytes:        4 * 1024,
+			parallelism:         8,
+			targetReqPerSec:     0,
+			decisionWait:        24 * time.Hour,
+			numTraces:           1_000_000,
+			policyPercentage:    1.0,
+			require2xDecisionWait: false,
+		},
+		{
 			name:                "dwBenchtimePlus1m_rps200",
 			tracesPerBatch:      30,
 			spansPerTrace:       7,
