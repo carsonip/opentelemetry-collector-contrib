@@ -79,45 +79,47 @@ func (s *pebbleTailStorage) Append(traceID pcommon.TraceID, rss ptrace.ResourceS
 
 func (s *pebbleTailStorage) Take(traceID pcommon.TraceID) (ptrace.Traces, bool) {
 	prefix := tracePrefix(traceID)
-	keys, out := s.readByTracePrefix(prefix)
-	if len(keys) == 0 {
+	out := s.readByTracePrefix(prefix)
+	if out.ResourceSpans().Len() == 0 {
 		return ptrace.Traces{}, false
 	}
-	s.deleteKeys(keys)
+	end := tracePrefixUpperBound(prefix)
+	if err := s.db.DeleteRange(prefix, end, pebble.NoSync); err != nil {
+		s.logger.Warn("failed deleting taken trace payload range from tail storage", zap.Error(err))
+	}
 	return out, true
 }
 
 func (s *pebbleTailStorage) Delete(traceID pcommon.TraceID) {
 	prefix := tracePrefix(traceID)
-	keys, _ := s.readByTracePrefix(prefix)
-	if len(keys) == 0 {
-		return
+	// Delete all entries for the trace in one range operation instead of
+	// iterating keys and deleting one-by-one.
+	end := tracePrefixUpperBound(prefix)
+	if err := s.db.DeleteRange(prefix, end, pebble.NoSync); err != nil {
+		s.logger.Warn("failed deleting trace payload range from tail storage", zap.Error(err))
 	}
-	s.deleteKeys(keys)
 }
 
-func (s *pebbleTailStorage) readByTracePrefix(prefix []byte) ([][]byte, ptrace.Traces) {
+func (s *pebbleTailStorage) readByTracePrefix(prefix []byte) ptrace.Traces {
 	iter, err := s.db.NewIter(nil)
 	if err != nil {
 		s.logger.Warn("failed to create tail storage iterator", zap.Error(err))
-		return nil, ptrace.Traces{}
+		return ptrace.NewTraces()
 	}
 	defer iter.Close()
 
 	// SeekPrefixGE enables prefix bloom filter usage when configured in Pebble options.
 	if ok := iter.SeekPrefixGE(prefix); !ok {
-		return nil, ptrace.Traces{}
+		return ptrace.NewTraces()
 	}
 
 	unmarshaler := &ptrace.ProtoUnmarshaler{}
 	result := ptrace.NewTraces()
-	keys := make([][]byte, 0)
 	for ; iter.Valid(); iter.Next() {
 		key := iter.Key()
 		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
-		keys = append(keys, bytes.Clone(key))
 
 		val, err := iter.ValueAndErr()
 		if err != nil {
@@ -143,22 +145,7 @@ func (s *pebbleTailStorage) readByTracePrefix(prefix []byte) ([][]byte, ptrace.T
 		s.logger.Warn("tail storage iterator error", zap.Error(err))
 	}
 
-	return keys, result
-}
-
-func (s *pebbleTailStorage) deleteKeys(keys [][]byte) {
-	batch := s.db.NewBatch()
-	defer batch.Close()
-
-	for _, key := range keys {
-		if err := batch.Delete(key, pebble.NoSync); err != nil {
-			s.logger.Warn("failed queuing trace payload delete in tail storage", zap.Error(err))
-		}
-	}
-
-	if err := batch.Commit(pebble.NoSync); err != nil {
-		s.logger.Warn("failed deleting trace payload from tail storage", zap.Error(err))
-	}
+	return result
 }
 
 func tracePrefix(traceID pcommon.TraceID) []byte {
@@ -166,6 +153,12 @@ func tracePrefix(traceID pcommon.TraceID) []byte {
 	copy(prefix[:16], traceID[:])
 	prefix[16] = traceIDSeparator
 	return prefix
+}
+
+func tracePrefixUpperBound(prefix []byte) []byte {
+	upper := bytes.Clone(prefix)
+	upper[len(upper)-1]++
+	return upper
 }
 
 func traceEntryKey(traceID pcommon.TraceID, seq uint64) []byte {
