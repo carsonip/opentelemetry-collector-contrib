@@ -506,19 +506,24 @@ run_mode() {
   COLLECTOR_PID=""
 
   local recv_start recv_end recv_delta recv_sps
-  local sampled_traces_start sampled_traces_end sampled_traces_delta sampled_spans_delta sampled_sps spans_per_trace
+  local sampled_traces_start sampled_traces_end sampled_traces_delta sampled_traces_sps
+  local non_sampled_traces_start non_sampled_traces_end non_sampled_traces_delta
+  local total_trace_decisions_delta sampled_rate_pct
   recv_start=$(extract_metric_any_name "$metrics_start_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
   recv_end=$(extract_metric_any_name "$metrics_end_file" "otelcol_receiver_accepted_spans" "otelcol_receiver_accepted_spans_total")
   sampled_traces_start=$(extract_metric_any_name_with_label "$metrics_start_file" 'sampled="true"' "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
   sampled_traces_end=$(extract_metric_any_name_with_label "$metrics_end_file" 'sampled="true"' "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
+  non_sampled_traces_start=$(extract_metric_any_name_with_label "$metrics_start_file" 'sampled="false"' "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
+  non_sampled_traces_end=$(extract_metric_any_name_with_label "$metrics_end_file" 'sampled="false"' "otelcol_processor_tail_sampling_global_count_traces_sampled" "otelcol_processor_tail_sampling_global_count_traces_sampled_total")
   recv_delta=$(awk -v e="$recv_end" -v s="$recv_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
   sampled_traces_delta=$(awk -v e="$sampled_traces_end" -v s="$sampled_traces_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
-  spans_per_trace=$((CHILD_SPANS + 1))
-  sampled_spans_delta=$(awk -v t="$sampled_traces_delta" -v spt="$spans_per_trace" 'BEGIN { printf "%.0f", (t + 0) * (spt + 0) }')
+  non_sampled_traces_delta=$(awk -v e="$non_sampled_traces_end" -v s="$non_sampled_traces_start" 'BEGIN { d = (e + 0) - (s + 0); if (d < 0) d = 0; printf "%.0f", d }')
+  total_trace_decisions_delta=$(awk -v st="$sampled_traces_delta" -v nst="$non_sampled_traces_delta" 'BEGIN { printf "%.0f", (st + 0) + (nst + 0) }')
   recv_sps=$(awk -v d="$recv_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
-  sampled_sps=$(awk -v d="$sampled_spans_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
+  sampled_traces_sps=$(awk -v d="$sampled_traces_delta" -v t="$LOAD_SEC" 'BEGIN { if (t + 0 <= 0) { print "0.00"; exit } printf "%.2f", (d + 0) / (t + 0) }')
+  sampled_rate_pct=$(awk -v st="$sampled_traces_delta" -v td="$total_trace_decisions_delta" 'BEGIN { if (td + 0 <= 0) { print "0.00"; exit } printf "%.2f", ((st + 0) / (td + 0)) * 100.0 }')
 
-  MODE="$mode" RECV_DELTA="$recv_delta" RECV_SPS="$recv_sps" SAMPLED_SPANS_DELTA="$sampled_spans_delta" SAMPLED_SPS="$sampled_sps" awk -F',' '
+  MODE="$mode" RECV_DELTA="$recv_delta" RECV_SPS="$recv_sps" SAMPLED_TRACES_DELTA="$sampled_traces_delta" SAMPLED_TRACES_SPS="$sampled_traces_sps" SAMPLED_RATE_PCT="$sampled_rate_pct" awk -F',' '
     NR==1 { next }
     {
       c++
@@ -531,12 +536,12 @@ run_mode() {
     }
     END {
       if (c == 0) {
-        printf "mode=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 cpu_avg_pct=0 cpu_peak_pct=0 cpu_final_pct=0 recv_spans=0 sampled_spans=0 recv_sps=0 sampled_sps=0\n", ENVIRON["MODE"]
+        printf "mode=%s samples=0 peak_mb=0 avg_mb=0 final_mb=0 cpu_avg_pct=0 cpu_peak_pct=0 cpu_final_pct=0 recv_spans=0 sampled_traces=0 recv_sps=0 sampled_traces_sps=0 sampled_rate_pct=0\n", ENVIRON["MODE"]
         exit
       }
-      printf "mode=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f cpu_avg_pct=%.2f cpu_peak_pct=%.2f cpu_final_pct=%.2f recv_spans=%s sampled_spans=%s recv_sps=%s sampled_sps=%s\n",
+      printf "mode=%s samples=%d peak_mb=%.2f avg_mb=%.2f final_mb=%.2f cpu_avg_pct=%.2f cpu_peak_pct=%.2f cpu_final_pct=%.2f recv_spans=%s sampled_traces=%s recv_sps=%s sampled_traces_sps=%s sampled_rate_pct=%s\n",
              ENVIRON["MODE"], c, max_rss/1024.0, (sum_rss/c)/1024.0, last_rss/1024.0, (sum_cpu/c), max_cpu, last_cpu,
-             ENVIRON["RECV_DELTA"], ENVIRON["SAMPLED_SPANS_DELTA"], ENVIRON["RECV_SPS"], ENVIRON["SAMPLED_SPS"]
+             ENVIRON["RECV_DELTA"], ENVIRON["SAMPLED_TRACES_DELTA"], ENVIRON["RECV_SPS"], ENVIRON["SAMPLED_TRACES_SPS"], ENVIRON["SAMPLED_RATE_PCT"]
     }' "$samples"
 }
 
