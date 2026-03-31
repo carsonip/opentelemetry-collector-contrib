@@ -34,10 +34,14 @@ func newPebbleTailStorage(storageDir string, logger *zap.Logger) (*pebbleTailSto
 	opts := &pebble.Options{
 		FormatMajorVersion: pebble.FormatValueSeparation,
 		Logger:             logger.Sugar(),
-		MemTableSize:       16 << 20,
+		MemTableSize:       32 << 20,
 		Comparer:           traceKeyComparer(),
 		Cache:              cache,
+		CompactionConcurrencyRange: func() (lower, upper int) {
+			return 1, 2
+		},
 	}
+
 	opts.Levels[0] = pebble.LevelOptions{
 		BlockSize:    32 << 10,
 		FilterPolicy: bloom.FilterPolicy(10),

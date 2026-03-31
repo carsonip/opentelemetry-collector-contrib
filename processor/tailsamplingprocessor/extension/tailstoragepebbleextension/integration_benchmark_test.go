@@ -48,51 +48,51 @@ func BenchmarkCollectorOTLPReceiverStorageBackends(b *testing.B) {
 	require.NoError(b, err)
 	shapes := []benchmarkShape{
 		{
-			name:                "dw1s_rps200",
-			tracesPerBatch:      30,
-			spansPerTrace:       7,
-			payloadBytes:        4 * 1024,
-			parallelism:         8,
-			targetReqPerSec:     200,
-			decisionWait:        time.Second,
-			numTraces:           1_000_000,
-			policyPercentage:    1.0,
+			name:                  "dw1s_rps200",
+			tracesPerBatch:        30,
+			spansPerTrace:         7,
+			payloadBytes:          4 * 1024,
+			parallelism:           8,
+			targetReqPerSec:       200,
+			decisionWait:          time.Second,
+			numTraces:             1_000_000,
+			policyPercentage:      1.0,
 			require2xDecisionWait: true,
 		},
 		{
-			name:                "dw1s_noRateLimit",
-			tracesPerBatch:      30,
-			spansPerTrace:       7,
-			payloadBytes:        4 * 1024,
-			parallelism:         8,
-			targetReqPerSec:     0,
-			decisionWait:        time.Second,
-			numTraces:           1_000_000,
-			policyPercentage:    1.0,
+			name:                  "dw1s_noRateLimit",
+			tracesPerBatch:        30,
+			spansPerTrace:         7,
+			payloadBytes:          4 * 1024,
+			parallelism:           8,
+			targetReqPerSec:       0,
+			decisionWait:          time.Second,
+			numTraces:             1_000_000,
+			policyPercentage:      1.0,
 			require2xDecisionWait: true,
 		},
 		{
-			name:                "dw1d_noRateLimit",
-			tracesPerBatch:      30,
-			spansPerTrace:       7,
-			payloadBytes:        4 * 1024,
-			parallelism:         8,
-			targetReqPerSec:     0,
-			decisionWait:        24 * time.Hour,
-			numTraces:           1_000_000,
-			policyPercentage:    1.0,
+			name:                  "dw1d_noRateLimit",
+			tracesPerBatch:        30,
+			spansPerTrace:         7,
+			payloadBytes:          4 * 1024,
+			parallelism:           8,
+			targetReqPerSec:       0,
+			decisionWait:          24 * time.Hour,
+			numTraces:             1_000_000,
+			policyPercentage:      1.0,
 			require2xDecisionWait: false,
 		},
 		{
-			name:                "dwBenchtimePlus1m_rps200",
-			tracesPerBatch:      30,
-			spansPerTrace:       7,
-			payloadBytes:        4 * 1024,
-			parallelism:         8,
-			targetReqPerSec:     200,
-			decisionWait:        benchTime + time.Minute,
-			numTraces:           1_000_000,
-			policyPercentage:    1.0,
+			name:                  "dwBenchtimePlus1m_rps200",
+			tracesPerBatch:        30,
+			spansPerTrace:         7,
+			payloadBytes:          4 * 1024,
+			parallelism:           8,
+			targetReqPerSec:       200,
+			decisionWait:          benchTime + time.Minute,
+			numTraces:             1_000_000,
+			policyPercentage:      1.0,
 			require2xDecisionWait: false,
 		},
 	}
@@ -419,15 +419,15 @@ func benchTimeDuration() (time.Duration, error) {
 }
 
 type benchmarkShape struct {
-	name             string
-	tracesPerBatch   int
-	spansPerTrace    int
-	payloadBytes     int
-	parallelism      int
-	targetReqPerSec  int
-	decisionWait     time.Duration
-	numTraces        uint64
-	policyPercentage float64
+	name                  string
+	tracesPerBatch        int
+	spansPerTrace         int
+	payloadBytes          int
+	parallelism           int
+	targetReqPerSec       int
+	decisionWait          time.Duration
+	numTraces             uint64
+	policyPercentage      float64
 	require2xDecisionWait bool
 }
 
