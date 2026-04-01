@@ -361,7 +361,7 @@ type Config struct {
 func (cfg *Config) Validate() error {
 	switch cfg.SamplingStrategy {
 	case samplingStrategyTraceComplete, samplingStrategySpanIngest:
-		return nil
+		// valid sampling strategies
 	default:
 		return fmt.Errorf(
 			"invalid sampling_strategy %q, expected one of %q or %q",
@@ -370,4 +370,14 @@ func (cfg *Config) Validate() error {
 			samplingStrategySpanIngest,
 		)
 	}
+
+	if cfg.TailStorageID != nil && !tailStorageExtensionFeatureGate.IsEnabled() {
+		return fmt.Errorf(
+			"'tail_storage' requires the %q feature gate to be enabled, use --feature-gates=+%s",
+			tailStorageExtensionFeatureGate.ID(),
+			tailStorageExtensionFeatureGate.ID(),
+		)
+	}
+
+	return nil
 }
