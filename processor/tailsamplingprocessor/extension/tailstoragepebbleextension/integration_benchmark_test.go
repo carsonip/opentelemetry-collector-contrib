@@ -44,9 +44,6 @@ import (
 )
 
 func BenchmarkCollectorOTLPReceiverStorageBackends(b *testing.B) {
-	benchTime, err := benchTimeDuration()
-	require.NoError(b, err)
-
 	rateLimitDims := []struct {
 		name        string
 		targetReqPS int
@@ -61,7 +58,6 @@ func BenchmarkCollectorOTLPReceiverStorageBackends(b *testing.B) {
 	}{
 		{name: "dw_1s", decisionWait: time.Second, require2xDecisionWait: true},
 		{name: "dw_1d", decisionWait: 24 * time.Hour, require2xDecisionWait: false},
-		{name: "dw_BenchtimePlus1m", decisionWait: benchTime + time.Minute, require2xDecisionWait: false},
 	}
 
 	for _, samplingRatePct := range []float64{0, 1.0, 100} {
