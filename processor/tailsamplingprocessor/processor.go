@@ -904,23 +904,26 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 			decision, policyName := tsp.makeDecisionOnSpanIngest(id, &spanIngestTraceData, metrics)
 			tsp.recordImmediateDecisionMetrics(decision, metrics, time.Since(evaluationStart))
 
-			// Persist current batch for pending traces in tail storage so disk-backed
-			// implementations can offload span payloads in span-ingest mode too.
-			tsp.tailStorage.Append(id, spanIngestTraceData.ReceivedBatches.ResourceSpans().At(0))
-
 			if decision == samplingpolicy.Sampled || decision == samplingpolicy.Dropped {
 				actualData.FinalDecision = decision
 				actualData.PolicyName = policyName
 				if decision == samplingpolicy.Sampled {
-					// Release all accumulated spans (including prior pending batches)
-					// from tail storage when a terminal sampled decision is reached.
+					// Release all accumulated spans (prior pending batches + current batch)
+					// without writing the current batch to storage first.
+					merged := ptrace.NewTraces()
 					if allSpans, ok := tsp.tailStorage.Take(id); ok {
-						actualData.ReceivedBatches = allSpans
+						appendAllTraces(merged, allSpans)
 					}
+					appendAllTraces(merged, spanIngestTraceData.ReceivedBatches)
+					actualData.ReceivedBatches = merged
 					tsp.releaseSampledTrace(tsp.ctx, id, actualData)
 				} else {
 					tsp.releaseNotSampledTrace(id, actualData)
 				}
+			} else {
+				// Persist current batch for pending traces so disk-backed
+				// implementations can offload span payloads in span-ingest mode.
+				tsp.tailStorage.Append(id, spanIngestTraceData.ReceivedBatches.ResourceSpans().At(0))
 			}
 			return
 		}
@@ -1057,6 +1060,13 @@ func getPolicyName(policy *policy) string {
 func appendToTraces(dest ptrace.Traces, rss ptrace.ResourceSpans) {
 	rs := dest.ResourceSpans().AppendEmpty()
 	rss.MoveTo(rs)
+}
+
+func appendAllTraces(dest ptrace.Traces, src ptrace.Traces) {
+	rs := src.ResourceSpans()
+	for i := 0; i < rs.Len(); i++ {
+		appendToTraces(dest, rs.At(i))
+	}
 }
 
 func newResourceSpanFromSpanAndScopes(rss ptrace.ResourceSpans, spanAndScopes []spanAndScope) (ptrace.ResourceSpans, *ptrace.Span) {
