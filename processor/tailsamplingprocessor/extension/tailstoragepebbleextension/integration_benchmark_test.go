@@ -29,6 +29,7 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/nopexporter"
 	"go.opentelemetry.io/collector/extension"
+	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/otelcol"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -41,9 +42,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/tailstorageextension"
 )
 
 func BenchmarkCollectorOTLPReceiverStorageBackends(b *testing.B) {
+	enableTailStorageFeatureGateForBenchmark(b)
+
 	rateLimitDims := []struct {
 		name        string
 		targetReqPS int
@@ -169,6 +173,15 @@ func setupCollectorBenchmark(b *testing.B, backend string, shape benchmarkShape)
 		app.Shutdown()
 		wg.Wait()
 	}, storageDir
+}
+
+func enableTailStorageFeatureGateForBenchmark(b *testing.B) {
+	b.Helper()
+	prev := tailstorageextension.IsFeatureGateEnabled()
+	require.NoError(b, featuregate.GlobalRegistry().Set(tailstorageextension.FeatureGateID, true))
+	b.Cleanup(func() {
+		require.NoError(b, featuregate.GlobalRegistry().Set(tailstorageextension.FeatureGateID, prev))
+	})
 }
 
 func collectorBenchmarkFactories(b *testing.B) otelcol.Factories {
