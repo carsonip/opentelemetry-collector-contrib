@@ -46,125 +46,111 @@ import (
 func BenchmarkCollectorOTLPReceiverStorageBackends(b *testing.B) {
 	benchTime, err := benchTimeDuration()
 	require.NoError(b, err)
-	for _, sampling_rate_pct := range []float64{0, 1.0, 100} {
-		b.Run(fmt.Sprintf("%.0f%%", sampling_rate_pct), func(b *testing.B) {
-			shapes := []benchmarkShape{
-				{
-					name:                  "dw1s_rps200",
-					tracesPerBatch:        30,
-					spansPerTrace:         7,
-					payloadBytes:          4 * 1024,
-					parallelism:           8,
-					targetReqPerSec:       200,
-					decisionWait:          time.Second,
-					numTraces:             1_000_000,
-					policyPercentage:      1.0,
-					require2xDecisionWait: true,
-				},
-				{
-					name:                  "dw1s_noRateLimit",
-					tracesPerBatch:        30,
-					spansPerTrace:         7,
-					payloadBytes:          4 * 1024,
-					parallelism:           8,
-					targetReqPerSec:       0,
-					decisionWait:          time.Second,
-					numTraces:             1_000_000,
-					policyPercentage:      1.0,
-					require2xDecisionWait: true,
-				},
-				{
-					name:                  "dw1d_noRateLimit",
-					tracesPerBatch:        30,
-					spansPerTrace:         7,
-					payloadBytes:          4 * 1024,
-					parallelism:           8,
-					targetReqPerSec:       0,
-					decisionWait:          24 * time.Hour,
-					numTraces:             1_000_000,
-					policyPercentage:      1.0,
-					require2xDecisionWait: false,
-				},
-				{
-					name:                  "dwBenchtimePlus1m_rps200",
-					tracesPerBatch:        30,
-					spansPerTrace:         7,
-					payloadBytes:          4 * 1024,
-					parallelism:           8,
-					targetReqPerSec:       200,
-					decisionWait:          benchTime + time.Minute,
-					numTraces:             1_000_000,
-					policyPercentage:      1.0,
-					require2xDecisionWait: false,
-				},
-			}
 
-			for _, shape := range shapes {
-				b.Run(shape.name, func(b *testing.B) {
-					for _, backend := range []string{"inmemory", "pebble"} {
-						b.Run(backend, func(b *testing.B) {
-							if shape.require2xDecisionWait {
-								requireBenchTimeAtLeast(b, 2*shape.decisionWait)
+	rateLimitDims := []struct {
+		name        string
+		targetReqPS int
+	}{
+		{name: "rps_200", targetReqPS: 200},
+		{name: "rps_inf", targetReqPS: 0},
+	}
+	decisionWaitDims := []struct {
+		name                  string
+		decisionWait          time.Duration
+		require2xDecisionWait bool
+	}{
+		{name: "dw_1s", decisionWait: time.Second, require2xDecisionWait: true},
+		{name: "dw_1d", decisionWait: 24 * time.Hour, require2xDecisionWait: false},
+		{name: "dw_BenchtimePlus1m", decisionWait: benchTime + time.Minute, require2xDecisionWait: false},
+	}
+
+	for _, samplingRatePct := range []float64{0, 1.0, 100} {
+		b.Run(fmt.Sprintf("sampling_%.0f%%", samplingRatePct), func(b *testing.B) {
+			for _, dwDim := range decisionWaitDims {
+				b.Run(dwDim.name, func(b *testing.B) {
+					for _, rlDim := range rateLimitDims {
+						shape := benchmarkShape{
+							tracesPerBatch:        30,
+							spansPerTrace:         7,
+							payloadBytes:          4 * 1024,
+							parallelism:           8,
+							targetReqPerSec:       rlDim.targetReqPS,
+							decisionWait:          dwDim.decisionWait,
+							numTraces:             1_000_000,
+							policyPercentage:      samplingRatePct,
+							require2xDecisionWait: dwDim.require2xDecisionWait,
+						}
+						b.Run(rlDim.name, func(b *testing.B) {
+							for _, backend := range []string{"inmemory", "pebble"} {
+								b.Run(backend, func(b *testing.B) {
+									runCollectorBenchmarkCase(b, shape, backend)
+								})
 							}
-
-							target, cleanup, storageDir := setupCollectorBenchmark(b, backend, shape)
-							defer cleanup()
-
-							conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
-							require.NoError(b, err)
-							defer func() { _ = conn.Close() }()
-							client := ptraceotlp.NewGRPCClient(conn)
-
-							referenceBatch := benchmarkBatch(1, shape)
-							b.SetBytes(int64((&ptrace.ProtoMarshaler{}).TracesSize(referenceBatch)))
-							b.ReportAllocs()
-							b.SetParallelism(shape.parallelism)
-							runtime.GC()
-							debug.FreeOSMemory()
-							baselineRSS, err := currentRSSBytes()
-							require.NoError(b, err)
-							stopRSSSampler := startRSSSampler(10 * time.Millisecond)
-							acquire, stopRateLimiter := startFixedRateLimiter(shape.targetReqPerSec)
-							defer stopRateLimiter()
-							var requests atomic.Uint64
-							b.ResetTimer()
-
-							b.RunParallel(func(pb *testing.PB) {
-								var seed uint64
-								for pb.Next() {
-									acquire()
-									seed++
-									requests.Add(1)
-									_, err := client.Export(b.Context(), ptraceotlp.NewExportRequestFromTraces(benchmarkBatch(seed, shape)))
-									require.NoError(b, err)
-								}
-							})
-							b.StopTimer()
-
-							elapsed := b.Elapsed()
-							if elapsed > 0 {
-								reqPerSec := float64(requests.Load()) / elapsed.Seconds()
-								spansPerSec := reqPerSec * float64(shape.spansPerRequest())
-								b.ReportMetric(reqPerSec, "recv_request/s")
-								b.ReportMetric(spansPerSec, "recv_spans/s")
-							}
-
-							peakRSS := stopRSSSampler()
-							deltaRSS := int64(peakRSS) - int64(baselineRSS)
-							if deltaRSS < 0 {
-								deltaRSS = 0
-							}
-							b.ReportMetric(float64(peakRSS)/(1024*1024), "peak_rss_mb")
-							b.ReportMetric(float64(deltaRSS)/(1024*1024), "rss_delta_mb")
-							storageBytes, err := dirSizeBytes(storageDir)
-							require.NoError(b, err)
-							b.ReportMetric(float64(storageBytes)/(1024*1024), "storage_mb")
 						})
 					}
 				})
 			}
 		})
 	}
+}
+
+func runCollectorBenchmarkCase(b *testing.B, shape benchmarkShape, backend string) {
+	if shape.require2xDecisionWait {
+		requireBenchTimeAtLeast(b, 2*shape.decisionWait)
+	}
+
+	target, cleanup, storageDir := setupCollectorBenchmark(b, backend, shape)
+	defer cleanup()
+
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(b, err)
+	defer func() { _ = conn.Close() }()
+	client := ptraceotlp.NewGRPCClient(conn)
+
+	referenceBatch := benchmarkBatch(1, shape)
+	b.SetBytes(int64((&ptrace.ProtoMarshaler{}).TracesSize(referenceBatch)))
+	b.ReportAllocs()
+	b.SetParallelism(shape.parallelism)
+	runtime.GC()
+	debug.FreeOSMemory()
+	baselineRSS, err := currentRSSBytes()
+	require.NoError(b, err)
+	stopRSSSampler := startRSSSampler(10 * time.Millisecond)
+	acquire, stopRateLimiter := startFixedRateLimiter(shape.targetReqPerSec)
+	defer stopRateLimiter()
+	var requests atomic.Uint64
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		var seed uint64
+		for pb.Next() {
+			acquire()
+			seed++
+			requests.Add(1)
+			_, err := client.Export(b.Context(), ptraceotlp.NewExportRequestFromTraces(benchmarkBatch(seed, shape)))
+			require.NoError(b, err)
+		}
+	})
+	b.StopTimer()
+
+	elapsed := b.Elapsed()
+	if elapsed > 0 {
+		reqPerSec := float64(requests.Load()) / elapsed.Seconds()
+		spansPerSec := reqPerSec * float64(shape.spansPerRequest())
+		b.ReportMetric(reqPerSec, "recv_request/s")
+		b.ReportMetric(spansPerSec, "recv_spans/s")
+	}
+
+	peakRSS := stopRSSSampler()
+	deltaRSS := int64(peakRSS) - int64(baselineRSS)
+	if deltaRSS < 0 {
+		deltaRSS = 0
+	}
+	b.ReportMetric(float64(peakRSS)/(1024*1024), "peak_rss_mb")
+	b.ReportMetric(float64(deltaRSS)/(1024*1024), "rss_delta_mb")
+	storageBytes, err := dirSizeBytes(storageDir)
+	require.NoError(b, err)
+	b.ReportMetric(float64(storageBytes)/(1024*1024), "storage_mb")
 }
 
 func setupCollectorBenchmark(b *testing.B, backend string, shape benchmarkShape) (string, func(), string) {
@@ -265,7 +251,7 @@ processors:
     block_on_overflow: true
     tail_storage: tail_storage_pebble/bench
     policies:
-      - name: probabilistic-1pct
+      - name: probabilistic
         type: probabilistic
         probabilistic:
           sampling_percentage: %.2f
@@ -423,7 +409,6 @@ func benchTimeDuration() (time.Duration, error) {
 }
 
 type benchmarkShape struct {
-	name                  string
 	tracesPerBatch        int
 	spansPerTrace         int
 	payloadBytes          int
