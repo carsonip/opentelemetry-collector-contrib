@@ -9,24 +9,15 @@ import (
 )
 
 // TailStorage stores span batches keyed by trace ID for tail-sampling decisions.
-//
-// Implementations may be in-memory or external (for example, disk-backed),
-// but all implementations must provide the same logical behavior:
-//   - Append adds spans to the current trace payload for a trace ID.
-//   - Take returns the current payload exactly once and makes it unavailable
-//     for future reads.
-//   - Delete removes any current payload and is safe to call multiple times.
-//
-// Implementations may perform physical cleanup lazily as long as the operations
-// above are logically immediate from the caller's perspective.
+// This interface is in development and subject to change.
 //
 // Concurrency contract:
 //   - TailStorage does not require implementations to provide internal locking.
-//   - The current caller is tailsamplingprocessor, and it serializes calls.
 //   - Implementations may add internal synchronization, but it is optional.
+//   - Caller e.g., tailsamplingprocessor is responsible for serialization at least per trace ID.
 type TailStorage interface {
 	// Append adds a resource-span batch to the current payload for traceID.
-	// A moved-from rss must not be used by the caller after this call.
+	// rss must not be used by the caller after this call.
 	Append(traceID pcommon.TraceID, rss ptrace.ResourceSpans)
 
 	// Take returns and removes all stored spans for a trace ID.
