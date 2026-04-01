@@ -910,6 +910,9 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 				if decision == samplingpolicy.Sampled {
 					// Release all accumulated spans (prior pending batches + current batch)
 					// without writing the current batch to storage first.
+					//
+					// FIXME: this means actualData.ReceivedBatches is not complete
+					// for releaseNotSampledTrace non sampled hook
 					merged := ptrace.NewTraces()
 					if allSpans, ok := tsp.tailStorage.Take(id); ok {
 						appendAllTraces(merged, allSpans)
