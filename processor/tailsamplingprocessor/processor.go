@@ -905,20 +905,18 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 			tsp.recordImmediateDecisionMetrics(decision, metrics, time.Since(evaluationStart))
 
 			if decision == samplingpolicy.Sampled || decision == samplingpolicy.Dropped {
+				// Release all accumulated spans (prior pending batches + current batch)
+				// without writing the current batch to storage first.
+				merged := ptrace.NewTraces()
+				if allSpans, ok := tsp.tailStorage.Take(id); ok {
+					appendAllTraces(merged, allSpans)
+				}
+				appendAllTraces(merged, spanIngestTraceData.ReceivedBatches)
+				actualData.ReceivedBatches = merged
+
 				actualData.FinalDecision = decision
 				actualData.PolicyName = policyName
 				if decision == samplingpolicy.Sampled {
-					// Release all accumulated spans (prior pending batches + current batch)
-					// without writing the current batch to storage first.
-					//
-					// FIXME: this means actualData.ReceivedBatches is not complete
-					// for releaseNotSampledTrace non sampled hook
-					merged := ptrace.NewTraces()
-					if allSpans, ok := tsp.tailStorage.Take(id); ok {
-						appendAllTraces(merged, allSpans)
-					}
-					appendAllTraces(merged, spanIngestTraceData.ReceivedBatches)
-					actualData.ReceivedBatches = merged
 					tsp.releaseSampledTrace(tsp.ctx, id, actualData)
 				} else {
 					tsp.releaseNotSampledTrace(id, actualData)
