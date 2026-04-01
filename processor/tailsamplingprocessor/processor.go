@@ -922,8 +922,7 @@ func (tsp *tailSamplingSpanProcessor) processTrace(id pcommon.TraceID, rss ptrac
 					tsp.releaseNotSampledTrace(id, actualData)
 				}
 			} else {
-				// Persist current batch for pending traces so disk-backed
-				// implementations can offload span payloads in span-ingest mode.
+				// Persist current batch for pending traces.
 				// Use the moved batch from spanIngestTraceData (rss has been moved).
 				tsp.tailStorage.Append(id, spanIngestTraceData.ReceivedBatches.ResourceSpans().At(0))
 			}
