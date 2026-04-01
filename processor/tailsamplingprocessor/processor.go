@@ -131,7 +131,6 @@ func newTracesProcessor(ctx context.Context, set processor.Settings, nextConsume
 		nonSampledIDCache:  nonSampledDecisions,
 		logger:             set.Logger,
 		idToTrace:          make(map[pcommon.TraceID]*TraceData),
-		tailStorage:        tailstorageextension.NewInMemoryTailStorage(),
 		deleteTraceQueue:   list.New(),
 		sampleOnFirstMatch: cfg.SampleOnFirstMatch,
 		blockOnOverflow:    cfg.BlockOnOverflow,
@@ -162,12 +161,14 @@ func (*tailSamplingSpanProcessor) Capabilities() consumer.Capabilities {
 // Start is invoked during service startup.
 func (tsp *tailSamplingSpanProcessor) Start(_ context.Context, host component.Host) error {
 	tsp.host = host
-	tailStorageExt, hasTailStorageExt, err := tailStorageExtension(host, tsp.cfg.TailStorageID)
-	if err != nil {
-		return err
-	}
-	if hasTailStorageExt {
+	if tsp.cfg.TailStorageID != nil {
+		tailStorageExt, err := tailStorageExtension(host, *tsp.cfg.TailStorageID)
+		if err != nil {
+			return err
+		}
 		tsp.tailStorage = tailStorageExt
+	} else {
+		tsp.tailStorage = tailstorageextension.NewInMemoryTailStorage()
 	}
 	policies, err := tsp.loadSamplingPolicies(host, tsp.cfg.PolicyCfgs)
 	if err != nil {
@@ -967,22 +968,19 @@ func extensions(host component.Host) map[string]samplingpolicy.Extension {
 	return scoped
 }
 
-func tailStorageExtension(host component.Host, storageID *component.ID) (tailstorageextension.TailStorage, bool, error) {
-	if storageID == nil {
-		return nil, false, nil
-	}
+func tailStorageExtension(host component.Host, storageID component.ID) (tailstorageextension.TailStorage, error) {
 	if host == nil {
-		return nil, false, errors.New("tail storage extension configured but host is nil")
+		return nil, errors.New("tail storage extension configured but host is nil")
 	}
-	extension, ok := host.GetExtensions()[*storageID]
+	extension, ok := host.GetExtensions()[storageID]
 	if !ok {
-		return nil, false, fmt.Errorf("tail storage extension '%s' not found", storageID)
+		return nil, fmt.Errorf("tail storage extension '%s' not found", storageID)
 	}
 	storageExtension, ok := extension.(tailstorageextension.TailStorage)
 	if !ok {
-		return nil, false, fmt.Errorf("non-tail-storage extension '%s' found", storageID)
+		return nil, fmt.Errorf("non-tail-storage extension '%s' found", storageID)
 	}
-	return storageExtension, true, nil
+	return storageExtension, nil
 }
 
 // Shutdown is invoked during service shutdown.
