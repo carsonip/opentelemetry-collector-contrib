@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/tailstorageextension"
 )
 
 // PolicyType indicates the type of sampling policy.
@@ -371,11 +372,11 @@ func (cfg *Config) Validate() error {
 		)
 	}
 
-	if cfg.TailStorageID != nil && !tailStorageExtensionFeatureGate.IsEnabled() {
+	if cfg.TailStorageID != nil && !tailstorageextension.IsFeatureGateEnabled() {
 		return fmt.Errorf(
 			"'tail_storage' requires the %q feature gate to be enabled, use --feature-gates=+%s",
-			tailStorageExtensionFeatureGate.ID(),
-			tailStorageExtensionFeatureGate.ID(),
+			tailstorageextension.FeatureGateID,
+			tailstorageextension.FeatureGateID,
 		)
 	}
 

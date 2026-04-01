@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.opentelemetry.io/collector/processor/processortest"
@@ -1523,6 +1524,8 @@ func TestExtension(t *testing.T) {
 }
 
 func TestTailStorageExtensionFromHost(t *testing.T) {
+	enableTailStorageFeatureGateForTest(t)
+
 	controller := newTestTSPController()
 	msp := new(consumertest.TracesSink)
 
@@ -1550,8 +1553,8 @@ func TestTailStorageExtensionFromHost(t *testing.T) {
 	controller.waitForTick()
 
 	assert.Len(t, msp.AllTraces(), 1)
-	assert.Greater(t, host.extension.appendCount, 0)
-	assert.Greater(t, host.extension.takeCount, 0)
+	assert.Positive(t, host.extension.appendCount)
+	assert.Positive(t, host.extension.takeCount)
 }
 
 func TestTailStorageExtensionNotConfigured(t *testing.T) {
@@ -1586,6 +1589,8 @@ func TestTailStorageExtensionNotConfigured(t *testing.T) {
 }
 
 func TestTailStorageExtensionNotFound(t *testing.T) {
+	enableTailStorageFeatureGateForTest(t)
+
 	cfg := Config{
 		DecisionWait:     defaultTestDecisionWait,
 		NumTraces:        defaultNumTraces,
@@ -1602,6 +1607,8 @@ func TestTailStorageExtensionNotFound(t *testing.T) {
 }
 
 func TestTailStorageExtensionWrongType(t *testing.T) {
+	enableTailStorageFeatureGateForTest(t)
+
 	cfg := Config{
 		DecisionWait:     defaultTestDecisionWait,
 		NumTraces:        defaultNumTraces,
@@ -1639,8 +1646,10 @@ type extension struct {
 	deleteCount int
 }
 
-var _ samplingpolicy.Extension = &extension{}
-var _ tailstorageextension.TailStorage = &extension{}
+var (
+	_ samplingpolicy.Extension         = &extension{}
+	_ tailstorageextension.TailStorage = &extension{}
+)
 
 // NewEvaluator implements samplingpolicy.Extension.
 func (e *extension) NewEvaluator(policyName string, cfg map[string]any) (samplingpolicy.Evaluator, error) {
@@ -1685,10 +1694,19 @@ func (*extension) Shutdown(_ context.Context) error {
 
 type nonTailStorageExtensionHost struct{}
 
-func (h *nonTailStorageExtensionHost) GetExtensions() map[component.ID]component.Component {
+func (*nonTailStorageExtensionHost) GetExtensions() map[component.ID]component.Component {
 	return map[component.ID]component.Component{
 		testExtensionID: &nonTailStorageExtension{},
 	}
+}
+
+func enableTailStorageFeatureGateForTest(t *testing.T) {
+	t.Helper()
+	prev := tailstorageextension.IsFeatureGateEnabled()
+	require.NoError(t, featuregate.GlobalRegistry().Set(tailstorageextension.FeatureGateID, true))
+	t.Cleanup(func() {
+		require.NoError(t, featuregate.GlobalRegistry().Set(tailstorageextension.FeatureGateID, prev))
+	})
 }
 
 type nonTailStorageExtension struct{}

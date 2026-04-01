@@ -16,6 +16,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/tailsamplingprocessor/internal/tailstorageextension"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -244,10 +245,10 @@ func TestConfigValidateTailStorageFeatureGate(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			prev := tailStorageExtensionFeatureGate.IsEnabled()
-			require.NoError(t, featuregate.GlobalRegistry().Set(tailStorageExtensionFeatureGate.ID(), tc.gateEnabled))
+			prev := tailstorageextension.IsFeatureGateEnabled()
+			require.NoError(t, featuregate.GlobalRegistry().Set(tailstorageextension.FeatureGateID, tc.gateEnabled))
 			t.Cleanup(func() {
-				require.NoError(t, featuregate.GlobalRegistry().Set(tailStorageExtensionFeatureGate.ID(), prev))
+				require.NoError(t, featuregate.GlobalRegistry().Set(tailstorageextension.FeatureGateID, prev))
 			})
 
 			cfg := &Config{
@@ -259,7 +260,7 @@ func TestConfigValidateTailStorageFeatureGate(t *testing.T) {
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.errSubstring)
-				assert.Contains(t, err.Error(), string(tailStorageExtensionFeatureGate.ID()))
+				assert.Contains(t, err.Error(), tailstorageextension.FeatureGateID)
 				return
 			}
 			require.NoError(t, err)

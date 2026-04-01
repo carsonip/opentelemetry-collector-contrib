@@ -1063,7 +1063,7 @@ func appendToTraces(dest ptrace.Traces, rss ptrace.ResourceSpans) {
 	rss.MoveTo(rs)
 }
 
-func appendAllTraces(dest ptrace.Traces, src ptrace.Traces) {
+func appendAllTraces(dest, src ptrace.Traces) {
 	rs := src.ResourceSpans()
 	for i := 0; i < rs.Len(); i++ {
 		appendToTraces(dest, rs.At(i))
